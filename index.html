@@ -273,9 +273,10 @@
             <div class="field-row"><label>自定义镜像根</label><input id="setMirrorRoot" class="input" placeholder="https://your-mirror.example/bmclapi（选“自定义镜像根”时生效）" /></div>
             <div class="field-row"><label>库代理</label><input id="setProxy" class="input" /></div>
             <div class="field-row"><label>CORS 网关</label><div style="display:flex;gap:8px;flex:1"><input id="setGateway" class="input" placeholder="https://mc-gateway.noon.pw/api/gw?url={url}" /><button class="btn ghost" id="btnTestGateway" type="button">测试</button></div></div>
+            <div class="field-row"><label>无 CORS 限制</label><div style="display:flex;gap:8px;flex:1;align-items:center"><label class="switch"><input type="checkbox" id="setNoCors" /><span></span></label><button class="btn ghost" id="btnTestNoCors" type="button">检测</button></div></div>
             <div class="field-row"><label>GitHub 代理</label><input id="setGhProxy" class="input" placeholder="https://gh-proxy.org/" /></div>
             <div class="field-row"><label>CurseForge API Key</label><input id="setCurseKey" class="input" placeholder="可选，用于解析清单里缺 fileName 的 mod" /></div>
-            <p class="muted">默认网关 <code>https://mc-gateway.noon.pw/api/gw?url={url}</code>（EdgeOne 部署），可换成自建实例；留空即不用网关。网关只收发不返回 Access-Control-Allow-Origin 的上游：官方 libraries / resources / launcher(meta).mojang.com，以及当前选中镜像站的根（BMCLAPI 与各高校镜像都不带 ACAO）；自带 CORS 的主机一律直连。镜像站点只换镜像根的运营方：BMCLAPI 覆盖全部资源，高校镜像只镜像 maven 子树。镜像站不可达时自动落到库代理 <code>repo.spongepowered.org/repository/maven-public/</code> 与源站（同一主机连续 3 次失败即熔断，本次会话内不再排它）。</p>
+            <p class="muted">默认网关 <code>https://mc-gateway.noon.pw/api/gw?url={url}</code>（EdgeOne 部署），可换成自建实例；留空即不用网关。网关只收发不返回 Access-Control-Allow-Origin 的上游：官方 libraries / resources / launcher(meta).mojang.com，以及当前选中镜像站的根（BMCLAPI 与各高校镜像都不带 ACAO）；自带 CORS 的主机一律直连。镜像站点只换镜像根的运营方：BMCLAPI 覆盖全部资源，高校镜像只镜像 maven 子树。镜像站不可达时自动落到库代理 <code>repo.spongepowered.org/repository/maven-public/</code> 与源站（同一主机连续 3 次失败即熔断，本次会话内不再排它）。<br>若用带 <code>--disable-web-security --user-data-dir=C:\tmp</code> 参数单独启动的 Chrome 打开本页，勾选「无 CORS 限制」：所有上游都直连（官方 libraries / resources、BMCLAPI、高校镜像），不再经过网关。该开关默认关闭，只对这一个浏览器实例生效；关掉同源策略的实例不要用来登录其他网站。</p>
           </div>
         </div>
         <div class="card">

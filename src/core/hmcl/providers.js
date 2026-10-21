@@ -117,6 +117,22 @@ export const MIRROR_SITES = {
 
 export const DEFAULT_MIRROR_SITE = 'bmclapi';
 
+// 探测当前浏览器是否已关闭同源策略(本机 Chrome 以 --disable-web-security --user-data-dir=... 启动)
+// 对不返回 ACAO 的官方库发一个 2 字节 Range 请求: 能读到状态码说明跨域限制没生效
+export async function probeCorsDisabled() {
+  const url = 'https://libraries.minecraft.net/org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { headers: { Range: 'bytes=0-1' }, credentials: 'omit', signal: controller.signal });
+    return { ok: res.status === 200 || res.status === 206, status: res.status };
+  } catch (err) {
+    return { ok: false, status: 0, error: String(err?.message || err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 浏览器内可用的镜像: 官方库走 Sponge 的 maven 聚合代理, 资源走按版本名寻址的静态镜像
 export const BROWSER_LIBRARY_PROXY = 'https://repo.spongepowered.org/repository/maven-public/';
 export const BROWSER_ASSET_MIRRORS = [
@@ -231,6 +247,8 @@ export class Sources {
     this.bmclRoot = config.bmclRoot || BMCLAPI_ROOT;
     this.mirrorSite = MIRROR_SITES[config.mirrorSite] ? config.mirrorSite : DEFAULT_MIRROR_SITE;
     this.mirrorRoot = config.mirrorRoot || '';
+    // 本机 Chrome 用 --disable-web-security 启动时关闭同源策略: 不再需要网关, 也不剔除无 ACAO 的主机
+    this.noCors = Boolean(config.noCors);
     this.ghProxy = config.ghProxy === undefined ? DEFAULT_GH_PROXY : config.ghProxy;
     this.gateway = config.gateway === undefined ? DEFAULT_GATEWAY : config.gateway;
     this.libraryProxy = config.libraryProxy ?? BROWSER_LIBRARY_PROXY;
@@ -355,7 +373,7 @@ export class Sources {
     const list = [];
     for (const url of urls) {
       if (!url) continue;
-      if (this.isBrowser) {
+      if (this.isBrowser && !this.noCors) {
         // 官方两个 CDN 无 ACAO: 有网关才包一层, 没网关就直接剔除
         if (this.hostNeedsGateway(url)) {
           if (this.gateway) {

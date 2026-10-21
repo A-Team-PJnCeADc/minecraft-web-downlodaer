@@ -1,7 +1,7 @@
 // 界面控制器: 版本/加载器/整合包解析, 计划生成, 导出执行与进度渲染
 // UI 优化: 版本列表虚拟滚动, 进度渲染节流(120ms)并复用 DOM, 速度曲线用 Canvas, 日志批量插入
 import { HashEngine } from '../core/hash.js';
-import { Sources, SOURCE_MODES, MIRROR_SITES, DEFAULT_MIRROR_SITE, DEFAULT_GATEWAY, DEFAULT_GH_PROXY, loadVersionManifest, loadFabricLoaderVersions, loadForgeVersions, loadNeoForgeVersions } from '../core/hmcl/providers.js';
+import { Sources, SOURCE_MODES, MIRROR_SITES, DEFAULT_MIRROR_SITE, DEFAULT_GATEWAY, DEFAULT_GH_PROXY, probeCorsDisabled, loadVersionManifest, loadFabricLoaderVersions, loadForgeVersions, loadNeoForgeVersions } from '../core/hmcl/providers.js';
 import { buildVersionPlan, buildModpackPlan, instanceIdFor } from '../core/hmcl/plan.js';
 import { officialUrlsFor } from '../core/hmcl/official.js';
 import { detectModpack, modrinthPlan, cursePlan, mcbbsPlan, multimcPlan } from '../core/hmcl/modpack.js';
@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   mirrorRoot: '',
   gateway: DEFAULT_GATEWAY,
   ghProxy: DEFAULT_GH_PROXY,
+  noCors: false,
   curseApiKey: '',
   proxy: 'https://repo.spongepowered.org/repository/maven-public/',
   os: detectTarget().os,
@@ -140,7 +141,7 @@ function guardRunning(action = '更换下载目标') {
 
 function applyRunningLock(on) {
   document.body.classList.toggle('running', on);
-  for (const id of ['sourceMode', 'setSourceMode', 'mirrorSite', 'setMirrorSite', 'setMirrorRoot', 'setGhProxy', 'setSink', 'setConcurrency', 'setChunk', 'setChunked', 'setHostConcurrency', 'setH2Concurrency', 'btnPlanVanilla', 'btnPlanLoader', 'btnLoaderList', 'setGateway', 'setProxy']) {
+  for (const id of ['sourceMode', 'setSourceMode', 'mirrorSite', 'setMirrorSite', 'setMirrorRoot', 'setGhProxy', 'setNoCors', 'setSink', 'setConcurrency', 'setChunk', 'setChunked', 'setHostConcurrency', 'setH2Concurrency', 'btnPlanVanilla', 'btnPlanLoader', 'btnLoaderList', 'setGateway', 'setProxy']) {
     const el = $(id);
     if (el) el.disabled = on;
   }
@@ -248,6 +249,7 @@ function applySettingsToForm() {
   $('setGateway').placeholder = DEFAULT_GATEWAY;
   $('setGhProxy').value = s.ghProxy;
   $('setGhProxy').placeholder = DEFAULT_GH_PROXY;
+  $('setNoCors').checked = Boolean(s.noCors);
   $('setCurseKey').value = s.curseApiKey;
   $('setCurseKey').placeholder = state.builtinCurseKey
     ? '已使用内置凭据（不显示）；填写可覆盖'
@@ -294,6 +296,25 @@ function bindSettings() {
     log(state.settings.ghProxy ? `GitHub 代理已保存: ${state.settings.ghProxy}` : '已清空 GitHub 代理（raw.githubusercontent.com 直连）');
   });
   $('btnTestGateway').addEventListener('click', testGateway);
+  $('setNoCors').addEventListener('change', () => {
+    state.settings.noCors = $('setNoCors').checked;
+    saveSettings();
+    rebuildSources();
+    renderCapabilities();
+    log(state.settings.noCors
+      ? '无 CORS 限制已开启：所有上游直连，不经网关（需要本机 Chrome 以 --disable-web-security 启动）'
+      : '无 CORS 限制已关闭：恢复同源策略下的候选过滤与网关');
+  });
+  $('btnTestNoCors').addEventListener('click', async () => {
+    log('检测同源策略是否已关闭…');
+    const result = await probeCorsDisabled();
+    if (result.ok) {
+      log(`跨域限制已关闭（官方 libraries 返回 ${result.status}）`);
+      if (!state.settings.noCors) log('可以把「无 CORS 限制」打开，省掉网关这一层');
+    } else {
+      log(`跨域限制仍在生效（${result.error || 'status ' + result.status}）：需要用 --disable-web-security --user-data-dir=<独立目录> 启动的 Chrome`, true);
+    }
+  });
   $('setCurseKey').addEventListener('change', () => {
     state.settings.curseApiKey = $('setCurseKey').value.trim();
     saveSettings();
@@ -392,6 +413,7 @@ function rebuildSources() {
     mirrorSite: state.settings.mirrorSite,
     mirrorRoot: state.settings.mirrorRoot,
     ghProxy: state.settings.ghProxy,
+    noCors: state.settings.noCors,
     gateway: state.settings.gateway,
     curseApiKey: activeCurseKey(),
     libraryProxy: state.settings.sourceMode === 'custom' ? state.settings.proxy : undefined,
@@ -444,6 +466,9 @@ function renderCapabilities() {
     ['CORS 网关', state.settings.gateway === DEFAULT_GATEWAY
       ? `${DEFAULT_GATEWAY}（默认）`
       : (state.settings.gateway || '（未配置，libraries/assets 会被剔除）')],
+    ['CORS 限制', state.settings.noCors
+      ? '已关闭（本机 Chrome --disable-web-security，全部直连）'
+      : '同源策略生效（按网关与候选过滤）'],
     ['GitHub 代理', state.settings.ghProxy === DEFAULT_GH_PROXY
       ? `${DEFAULT_GH_PROXY}（默认）`
       : (state.settings.ghProxy || '（未配置，raw.githubusercontent 直连）')],
@@ -1006,9 +1031,12 @@ async function retryFailedViaGateway() {
     log('先在设置里填写 CORS 网关：官方 libraries / resources 不返回 ACAO，必须经网关才能取', true);
     return;
   }
-  const wrap = (url) => (gateway.includes('{url}')
-    ? gateway.replace('{url}', encodeURIComponent(url))
-    : gateway.replace(/\/$/, '') + '/' + url);
+  const wrap = (url) => {
+    if (state.settings.noCors) return url;   // 已关闭同源策略: 官方地址直接取, 不必过网关
+    return gateway.includes('{url}')
+      ? gateway.replace('{url}', encodeURIComponent(url))
+      : gateway.replace(/\/$/, '') + '/' + url;
+  };
   const failed = state.engine.tasks.filter((t) => t.failed && t.kind === 'http');
   let patched = 0;
   let skipped = 0;
