@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MC 下载器 · 纯前端版本/整合包下载</title>
+<link rel="stylesheet" href="assets/css/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" class="brand-mark" aria-hidden="true">
+        <path d="M3 7.5 12 3l9 4.5v9L12 21 3 16.5z" fill="currentColor" opacity=".22"/>
+        <path d="M3 7.5 12 3l9 4.5v9L12 21 3 16.5zm9-2.2L5.2 8.4v6.9L12 18.6l6.8-3.3V8.4z" fill="currentColor"/>
+        <path d="M12 5.3 18.8 8.4 12 11.6 5.2 8.4z" fill="currentColor" opacity=".55"/>
+      </svg>
+      <span class="brand-text">MC 下载器</span>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="home">
+        <svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
+        <span>主页</span>
+      </button>
+      <button class="nav-item" data-view="download">
+        <svg viewBox="0 0 24 24"><path d="M12 3v10.2l3.6-3.6 1.4 1.5-6 6-6-6 1.4-1.5L10 13.2V3zM4 19h16v2H4z"/></svg>
+        <span>下载</span>
+      </button>
+      <button class="nav-item" data-view="instance">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18v4H3zm0 5h18v4H3zm0 5h18v4H3z"/></svg>
+        <span>实例与导出</span>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 4-2.1-.6a7 7 0 0 0-.6-1.5l1.1-1.9-1.4-1.4-1.9 1.1a7 7 0 0 0-1.5-.6L14 5h-4l-.6 2.1a7 7 0 0 0-1.5.6L6 6.6 4.6 8l1.1 1.9a7 7 0 0 0-.6 1.5L3 12v4l2.1.6c.15.53.35 1.03.6 1.5L4.6 20 6 21.4l1.9-1.1c.47.25.97.45 1.5.6L10 23h4l.6-2.1c.53-.15 1.03-.35 1.5-.6l1.9 1.1 1.4-1.4-1.1-1.9c.25-.47.45-.97.6-1.5L21 16v-4z" opacity=".85"/></svg>
+        <span>设置</span>
+      </button>
+      <button class="nav-item" data-view="about">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
+        <span>说明</span>
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      <span class="dot" id="netDot"></span>
+      <span id="netText">未连接</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">主页</h1>
+        <p class="subtitle" id="viewSubtitle">纯前端解析与下载，导出启动器可直接使用的 .minecraft 压缩包</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btnTheme" title="切换主题">
+          <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="content">
+      <!-- 主页 -->
+      <div class="view active" id="view-home">
+        <div class="grid-2">
+          <div class="card">
+            <h2>运行方式</h2>
+            <p class="muted">页面本身不发起任何服务端下载。清单解析、分片下载、哈希校验与 ZIP 封包全部在浏览器内完成，可保存到本地文件或 OPFS 暂存后下载。</p>
+            <ul class="tick-list" id="capList"></ul>
+          </div>
+          <div class="card">
+            <h2>引擎参数</h2>
+            <div class="kv" id="engineFacts"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>流程</h2>
+          <ol class="steps">
+            <li><b>解析清单</b> 版本清单 → 版本 JSON → 库/资源索引/日志配置，对应 HMCL 的 GameBuilder 流程</li>
+            <li><b>构建计划</b> 规则过滤、natives 分类器、加载器补丁合并、整合包清单展开</li>
+            <li><b>预排布 ZIP</b> 按已知大小计算本地文件头偏移，数据区可被任意顺序写入</li>
+            <li><b>分片下载</b> 文件内 Range 分片 + 跨文件并发，分片 CRC 在 Worker 的 WASM 内计算</li>
+            <li><b>顺序校验</b> 分片按序落盘并串行喂给 SHA-1，与清单哈希比对</li>
+            <li><b>封包</b> 补写 CRC、中央目录，必要时写 ZIP64 记录</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- 下载 -->
+      <div class="view" id="view-download">
+        <div class="tabs" id="downloadTabs">
+          <button class="tab active" data-tab="vanilla">原版游戏</button>
+          <button class="tab" data-tab="loader">加载器</button>
+          <button class="tab" data-tab="modpack">整合包</button>
+        </div>
+
+        <div class="tab-panel active" id="panel-vanilla">
+          <div class="split">
+            <div class="card list-card">
+              <div class="list-toolbar">
+                <input id="versionSearch" class="input" placeholder="搜索版本" />
+                <select id="versionType" class="input compact">
+                  <option value="release">正式版</option>
+                  <option value="snapshot">快照</option>
+                  <option value="all">全部</option>
+                  <option value="old">旧版本</option>
+                </select>
+                <select id="sourceMode" class="input compact" title="下载源（DEFAULT 按地区选主源）">
+                  <option value="default">自动</option>
+                  <option value="official">官方源</option>
+                  <option value="mirror">镜像源</option>
+                  <option value="custom">自定义</option>
+                </select>
+                <select id="mirrorSite" class="input compact" title="镜像站点（镜像源/自动 时生效）">
+                  <option value="bmclapi">镜像站：BMCLAPI</option>
+                  <option value="campus">镜像站：高校镜像</option>
+                  <option value="custom">镜像站：自定义</option>
+                </select>
+              </div>
+              <div class="list" id="versionList"></div>
+            </div>
+            <div class="card detail-card">
+              <h2 id="detailTitle">选择一个版本</h2>
+              <div class="kv" id="detailInfo"></div>
+              <div class="field-row">
+                <label>实例名</label>
+                <input id="instanceName" class="input" placeholder="默认与版本号一致" />
+              </div>
+              <div class="field-row">
+                <label>包含资源文件</label>
+                <label class="switch"><input type="checkbox" id="optAssets" checked /><span></span></label>
+              </div>
+              <div class="field-row">
+                <label>包含运行库</label>
+                <label class="switch"><input type="checkbox" id="optLibs" checked /><span></span></label>
+              </div>
+              <div class="actions">
+                <button class="btn" id="btnPlanVanilla">解析并生成计划</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="panel-loader">
+          <div class="split">
+            <div class="card list-card">
+              <div class="list-toolbar">
+                <select id="loaderType" class="input">
+                  <option value="fabric">Fabric</option>
+                  <option value="quilt">Quilt</option>
+                  <option value="legacyfabric">Legacy Fabric</option>
+                  <option value="forge">Forge</option>
+                  <option value="neoforge">NeoForge</option>
+                </select>
+                <select id="loaderGameVersion" class="input compact" title="与原版游戏页联动的游戏版本"></select>
+                <button class="btn ghost" id="btnLoaderList">列出加载器</button>
+              </div>
+              <div class="list" id="loaderList"></div>
+            </div>
+            <div class="card detail-card">
+              <h2 id="loaderTitle">加载器</h2>
+              <div class="kv" id="loaderInfo"></div>
+              <h2 style="margin-top:14px">可选组件</h2>
+              <div class="kv" id="loaderExtras"><p class="muted">先选择加载器版本</p></div>
+              <div class="actions">
+                <button class="btn" id="btnPlanLoader">解析并生成计划</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="panel-modpack">
+          <div class="card">
+            <div class="drop-zone" id="dropZone">
+              <input type="file" id="modpackFile" accept=".zip,application/zip" hidden />
+              <p><b>拖入整合包压缩包</b> 或 <a href="#" id="pickModpack">选择文件</a></p>
+              <p class="muted">支持 Modrinth / CurseForge / MCBBS / MultiMC(Prism) 清单</p>
+            </div>
+            <div class="kv" id="modpackInfo"></div>
+            <div class="actions">
+              <button class="btn" id="btnPlanModpack" disabled>解析并生成计划</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 实例与导出 -->
+      <div class="view" id="view-instance">
+        <div class="grid-2">
+          <div class="card">
+            <h2>计划摘要</h2>
+            <div class="kv" id="planSummary"><p class="muted">尚未生成计划。在“下载”页选择版本或整合包后生成。</p></div>
+          </div>
+          <div class="card">
+            <h2>导出选项</h2>
+            <div class="field-row"><label>并发连接</label><input id="setConcurrency" class="input" type="number" min="1" max="64" value="16" /></div>
+            <div class="field-row"><label>分片大小 (MiB)</label><input id="setChunk" class="input" type="number" min="1" max="16" value="1" /></div>
+            <div class="field-row"><label>分片下载</label><label class="switch"><input type="checkbox" id="setChunked" /><span></span></label></div>
+            <div class="field-row"><label>每主机连接</label><input id="setHostConcurrency" class="input" type="number" min="1" max="16" value="16" /></div>
+            <div class="field-row"><label>HTTP/2 每主机流</label><input id="setH2Concurrency" class="input" type="number" min="1" max="64" value="32" /></div>
+            <p class="muted">分片下载 = 同一个文件拆成多个 Range 请求，慢速链路更快，但部分站点会判定为异常流量（人机验证/限流），默认关闭。关闭时每个文件只发一条连接，文件之间仍然按“并发连接”并行。并发按 HTTP/2 多路复用设计：同一主机的请求跑在一条连接的多个流上，上限用「HTTP/2 每主机流」（默认 32）；浏览器不能指定 HTTP 版本、也读不到协商结果，所以该主机连续失败 2 次就自动回退到 HTTP/1.1 的「每主机连接」（默认 6）。</p>
+            <div class="field-row"><label>校验哈希</label><label class="switch"><input type="checkbox" id="setVerify" checked /><span></span></label></div>
+            <div class="field-row"><label>保存方式</label><select id="setSink" class="input"><option value="auto">自动</option><option value="file">直接写入磁盘</option><option value="opfs">OPFS 暂存</option></select></div>
+            <div class="actions">
+              <button class="btn primary" id="btnStart" disabled>开始导出</button>
+              <button class="btn ghost" id="btnCancel" disabled>取消</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="progressCard" hidden>
+          <div class="progress-head">
+            <h2>进度</h2>
+            <div class="progress-meta">
+              <span id="pgPercent">0%</span>
+              <span id="pgBytes">0 / 0</span>
+              <span id="pgSpeed">0 MiB/s</span>
+              <span id="pgEta">--</span>
+            </div>
+          </div>
+          <div class="bar big"><div class="bar-fill" id="pgBar"></div></div>
+          <canvas id="speedChart" class="speed-chart" width="960" height="96"></canvas>
+          <div class="cat-list" id="catList"></div>
+          <div class="log" id="logBox"></div>
+        </div>
+
+        <div class="card" id="resultCard" hidden>
+          <h2>导出结果</h2>
+          <div class="kv" id="resultInfo"></div>
+          <div class="actions">
+            <button class="btn primary" id="btnSave">保存压缩包</button>
+          </div>
+        </div>
+
+        <div class="card" id="failCard" hidden>
+          <div class="progress-head">
+            <h2>未完成条目</h2>
+            <div class="actions" style="margin:0">
+              <button class="btn primary" id="btnRetry">重试失败条目</button>
+              <button class="btn" id="btnRetryGateway">从网关重试（官方哈希地址）</button>
+              <button class="btn ghost" id="btnSavePartial">仍然保存压缩包</button>
+            </div>
+          </div>
+          <div class="kv" id="failList"></div>
+        </div>
+      </div>
+
+      <!-- 设置 -->
+      <div class="view" id="view-settings">
+        <div class="grid-2">
+          <div class="card">
+            <h2>目标平台</h2>
+            <div class="field-row"><label>操作系统</label><select id="setOs" class="input">
+              <option value="windows">Windows</option><option value="linux">Linux</option><option value="osx">macOS</option>
+            </select></div>
+            <div class="field-row"><label>架构</label><select id="setArch" class="input">
+              <option value="x86_64">x86_64</option><option value="arm64">arm64</option><option value="x86">x86</option>
+            </select></div>
+            <p class="muted">仅影响规则判定与 natives 分类器选择，不改变下载内容来源。</p>
+          </div>
+          <div class="card">
+            <h2>下载源</h2>
+            <div class="field-row"><label>源站/镜像</label><select id="setSourceMode" class="input">
+              <option value="default">自动（DEFAULT，按地区选主源）</option>
+              <option value="official">官方源（OFFICIAL，镜像仅兜底）</option>
+              <option value="mirror">镜像源（MIRROR，镜像优先）</option>
+              <option value="custom">自定义（自填库代理与网关）</option>
+            </select></div>
+            <div class="field-row"><label>镜像站点</label><select id="setMirrorSite" class="input">
+              <option value="bmclapi">BMCLAPI（全结构）</option>
+              <option value="campus">高校镜像（maven 子树）</option>
+              <option value="custom">自定义镜像根</option>
+            </select></div>
+            <div class="field-row"><label>自定义镜像根</label><input id="setMirrorRoot" class="input" placeholder="https://your-mirror.example/bmclapi（选“自定义镜像根”时生效）" /></div>
+            <div class="field-row"><label>库代理</label><input id="setProxy" class="input" /></div>
+            <div class="field-row"><label>CORS 网关</label><div style="display:flex;gap:8px;flex:1"><input id="setGateway" class="input" placeholder="https://mc-gateway.noon.pw/api/gw?url={url}" /><button class="btn ghost" id="btnTestGateway" type="button">测试</button></div></div>
+            <div class="field-row"><label>GitHub 代理</label><input id="setGhProxy" class="input" placeholder="https://gh-proxy.org/" /></div>
+            <div class="field-row"><label>CurseForge API Key</label><input id="setCurseKey" class="input" placeholder="可选，用于解析清单里缺 fileName 的 mod" /></div>
+            <p class="muted">默认网关 <code>https://mc-gateway.noon.pw/api/gw?url={url}</code>（EdgeOne 部署），可换成自建实例；留空即不用网关。网关只收发不返回 Access-Control-Allow-Origin 的上游：官方 libraries / resources / launcher(meta).mojang.com，以及当前选中镜像站的根（BMCLAPI 与各高校镜像都不带 ACAO）；自带 CORS 的主机一律直连。镜像站点只换镜像根的运营方：BMCLAPI 覆盖全部资源，高校镜像只镜像 maven 子树。镜像站不可达时自动落到库代理 <code>repo.spongepowered.org/repository/maven-public/</code> 与源站（同一主机连续 3 次失败即熔断，本次会话内不再排它）。</p>
+          </div>
+        </div>
+        <div class="card">
+          <h2>缓存</h2>
+          <div class="actions"><button class="btn ghost" id="btnClearOpfs">清理 OPFS 暂存</button></div>
+          <p class="muted" id="opfsInfo"></p>
+        </div>
+      </div>
+
+      <!-- 说明 -->
+      <div class="view" id="view-about">
+        <div class="card">
+          <h2>能力边界</h2>
+          <ul class="tick-list">
+            <li>原版：版本 JSON、客户端 jar、运行库、资源索引与资源对象、日志配置全部可下载</li>
+            <li>Fabric / Quilt / Legacy Fabric：按加载器 profile JSON 合并库与主类，全部可下载</li>
+            <li>Forge / NeoForge：可解析安装器内的版本补丁与库；安装器声明的 processor 需要 JVM，浏览器无法执行，导出报告中会逐项列出</li>
+            <li>整合包：Modrinth 完整；CurseForge 需要清单内含 fileName；MCBBS 的 addons 需要按项目 ID 解析，未展开时列入报告</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>文件排列（版本隔离）</h2>
+          <pre class="tree">.minecraft/
+  assets/indexes/&lt;id&gt;.json
+  assets/objects/&lt;前两位&gt;/&lt;hash&gt;
+  assets/log_configs/&lt;id&gt;
+  libraries/&lt;maven 路径&gt;
+  versions/&lt;实例ID&gt;/&lt;实例ID&gt;.json
+  versions/&lt;实例ID&gt;/&lt;实例ID&gt;.jar
+  versions/&lt;实例ID&gt;/mods|config|saves|resourcepacks/...</pre>
+          <p class="muted">实例的游戏目录落在 versions/&lt;实例ID&gt;/ 下，等价于 HMCL 开启版本隔离后的布局。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script type="module" src="src/ui/app.js"></script>
+</body>
+</html>

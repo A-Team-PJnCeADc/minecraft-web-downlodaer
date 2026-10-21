@@ -1,0 +1,20 @@
+{
+  "name": "mcweb-export",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "纯前端 Minecraft 版本/整合包解析与下载器，导出为启动器可用的 .minecraft 压缩包",
+  "scripts": {
+    "dev": "node tools/serve.mjs",
+    "serve": "node tools/serve.mjs",
+    "verify": "node tools/node-verify.mjs",
+    "wasm": "node tools/build-wasm.mjs",
+    "test:hash": "node tools/test-hash.mjs",
+    "gateway": "node ../mc-gateway/server.js",
+    "test:retry": "node tools/test-retry.mjs",
+    "key": "node tools/extract-hmcl-key.mjs"
+  },
+  "devDependencies": {
+    "wabt": "^1.0.39"
+  }
+}
