@@ -12,7 +12,9 @@
     "test:hash": "node tools/test-hash.mjs",
     "gateway": "node ../mc-gateway/server.js",
     "test:retry": "node tools/test-retry.mjs",
-    "key": "node tools/extract-hmcl-key.mjs"
+    "key": "node tools/extract-hmcl-key.mjs",
+    "build": "node tools/build-dist.mjs",
+    "deploy": "npm run build && npx wrangler deploy"
   },
   "devDependencies": {
     "wabt": "^1.0.39"

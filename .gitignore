@@ -1,5 +1,6 @@
 node_modules/
 out/
+dist/
 config/keys.local.json
 .packs/
 /.idea/
