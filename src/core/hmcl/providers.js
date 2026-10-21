@@ -261,7 +261,9 @@ export class Sources {
   }
 
   // 文件候选: 大陆的 DEFAULT 与 MIRROR 镜像优先, OFFICIAL 官方优先; 非大陆 DEFAULT 不用镜像
+  // 关闭 CORS 后官方源不再有读取障碍
   get preferMirror() {
+    if (this.noCors && this.mode !== 'mirror') return false;
     if (this.mode === 'mirror') return true;
     if (this.mode === 'official') return false;
     return this.mainland;
@@ -447,10 +449,11 @@ export class Sources {
       || ('https://libraries.minecraft.net/' + lib.mavenPath);
     const officialIsCors = this.hostHasCors(official);
     const head = [];
-    if (officialIsCors) head.push(official);
+    // 关闭 CORS 时官方库地址可以直接读
+    if (officialIsCors || this.noCors) head.push(official);
     // 官方库主机无 CORS: 镜像优先, 或浏览器里没有网关时只能走代理
     const wantProxy = Boolean(this.libraryProxy)
-      && (this.preferMirror || (!officialIsCors && this.isBrowser && !this.gateway));
+      && (this.preferMirror || (!officialIsCors && this.isBrowser && !this.gateway && !this.noCors));
     if (wantProxy) head.push(this.libraryProxy + lib.mavenPath);
     const list = this.normalize([...head, ...this.expandRaw(official)]);
     if (list.length) return list;
@@ -517,6 +520,10 @@ export class Sources {
       .replace('{name}', name)
       .replace('{hash2}', hash.substring(0, 2))
       .replace('{hash}', hash));
+    // 关闭 CORS 时官方哈希地址就是最优解
+    if (this.noCors && this.mode !== 'mirror') {
+      return this.normalize([official, ...head]);
+    }
     const chain = this.mode === 'official' ? [] : head;
     const list = this.normalize([...chain, ...this.expandRaw(official)]);
     if (list.length) return list;
