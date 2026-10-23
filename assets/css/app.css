@@ -67,7 +67,7 @@ html, body {
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.app { display: grid; grid-template-columns: 208px 1fr; height: 100vh; }
+.app { display: grid; grid-template-columns: 208px 1fr; height: 100vh; height: 100dvh; }
 
 /* 侧栏 */
 .sidebar {
@@ -265,3 +265,88 @@ body.running .list-toolbar .input { opacity: .55; }
 .hint { border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12.5px; margin-top: 10px; }
 .hint.warn { background: var(--tertiary-fixed); color: var(--on-tertiary-fixed); }
 .hint.error { background: var(--error-container); color: var(--on-error-container); }
+
+/* 窄屏(手机/竖屏平板): 侧栏改为贴顶横向导航, 整页文档滚动
+   侧栏宽度固定 208px, 视口 390px 时主区只剩 182px, 工具条下拉框会被挤出视口右侧 */
+@media (max-width: 820px) {
+  html, body { height: auto; }
+  .app {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .sidebar {
+    position: sticky; top: 0; z-index: 30;
+    flex-direction: row; align-items: center; gap: 6px;
+    padding: 7px 8px;
+    border-right: 0; border-bottom: 1px solid var(--outline-variant);
+    background: var(--surface-container-low);
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .brand { padding: 0 4px; flex: none; gap: 8px; }
+  .brand-mark { width: 22px; height: 22px; }
+  .brand-text { font-size: 14px; white-space: nowrap; }
+  .nav { flex-direction: row; gap: 2px; flex: 1 1 auto; min-width: 0; }
+  .nav-item { flex: none; padding: 7px 10px; gap: 6px; font-size: 13px; white-space: nowrap; }
+  .nav-item svg { width: 15px; height: 15px; }
+  .sidebar-foot { margin: 0; padding: 0 4px; border-top: 0; flex: none; gap: 6px; }
+  .sidebar-foot #netText { font-size: 11px; max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .main { min-height: 0; }
+  .topbar { padding: 10px 12px 4px; align-items: center; gap: 10px; }
+  .topbar h1 { font-size: 17px; }
+  .subtitle { font-size: 12px; }
+  .content { padding: 6px 12px 28px; overflow: visible; }
+
+  .card { padding: 12px 13px; }
+  .grid-2, .split { grid-template-columns: 1fr; }
+
+  /* 标签行横向滚动, 避免文字被挤成竖排 */
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; white-space: nowrap; padding: 8px 15px; }
+
+  /* 工具条换行: 搜索框独占一行, 下拉框两列, 保证都在视口内可点 */
+  .list-toolbar { flex-wrap: wrap; gap: 7px; }
+  .list-toolbar #versionSearch { flex: 1 1 100%; width: 100%; }
+  .list-toolbar .input, .list-toolbar .input.compact {
+    flex: 1 1 calc(50% - 4px); width: auto; max-width: none; min-width: 0;
+  }
+  .list-toolbar .btn { flex: 1 1 100%; }
+
+  .list { height: 44vh; height: 44dvh; min-height: 240px; }
+  .list-item { padding: 10px 10px; }
+
+  .field-row { flex-wrap: wrap; align-items: center; }
+  /* 窄屏统一改为「字段名在上、控件占满一行」, 避免不同长度标签把输入框挤成参差的宽度 */
+  .field-row .input { flex: 1 1 100%; width: 100%; max-width: none; min-width: 0; }
+  #view-settings .field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  #view-settings .field-row > label:first-child { flex: none; line-height: 1.5; }
+
+  .actions .btn { flex: 1 1 auto; }
+  .progress-meta { flex-wrap: wrap; gap: 4px 12px; }
+  .speed-chart { height: 64px; margin-bottom: 10px; }
+  .log { height: 130px; }
+  .tree { overflow-x: auto; }
+
+  /* 输入控件 16px: 小于该值时 iOS 聚焦会自动放大整页 */
+  .input, select.input, #view-settings .field-row .input { font-size: 16px; }
+  .btn { font-size: 14px; padding: 9px 16px; }
+  .kv { font-size: 13px; }
+}
+
+/* 超窄屏: 收起品牌文字与连接状态, 导航改为纯文字胶囊, 保证 5 个导航项在 320px 一行放下 */
+@media (max-width: 480px) {
+  .brand-text { display: none; }
+  .sidebar-foot { display: none; }
+  .nav-item { padding: 7px 10px; font-size: 13px; }
+  .nav-item svg { display: none; }
+  .brand { padding: 0 2px; }
+  .topbar-actions .icon-btn { width: 32px; height: 32px; }
+}
+

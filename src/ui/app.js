@@ -231,6 +231,10 @@ function switchView(view) {
   const meta = VIEW_META[view] || VIEW_META.home;
   $('viewTitle').textContent = meta[0];
   $('viewSubtitle').textContent = meta[1];
+  // 手机上整页滚动, 切页后回到顶部; 否则停在上一页的滚动位置, 新页面看起来像是没切换
+  const content = document.querySelector('.content');
+  if (content) content.scrollTop = 0;
+  if (window.scrollY) window.scrollTo(0, 0);
   if (view === 'settings') refreshStorageInfo();
   if (view === 'download') versionListView?.refresh();
 }
@@ -389,8 +393,11 @@ function bindSettings() {
 
 // 只用于请求, 不写入界面, 也不回填到设置项
 async function loadBuiltinCredentials() {
+  // 4 秒硬超时: 该文件多数部署下不存在(404), 个别网络会把它挂成长连接
+  const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : 0;
   try {
-    const res = await fetch('config/keys.local.json', { cache: 'no-store' });
+    const res = await fetch('config/keys.local.json', { cache: 'no-store', signal: ctrl?.signal });
     if (!res.ok) return;
     const json = await res.json();
     if (json && typeof json.curseApiKey === 'string' && json.curseApiKey.trim()) {
@@ -400,6 +407,8 @@ async function loadBuiltinCredentials() {
     }
   } catch {
     // 没有该文件属于正常情况
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1268,15 +1277,10 @@ function stopTicker() {
   tickerTimer = 0;
 }
 
-// 启动
-async function boot() {
-  applySettingsToForm();
-  await loadBuiltinCredentials();
-  applySettingsToForm(); // 内置凭据加载后再刷新占位提示
-  rebuildSources();
-  bindSettings();
-  renderCapabilities();
-
+// 启动: 先同步绑定全部界面事件, 再做联网初始化
+// 顺序不能反: 内置凭据 fetch 在移动网络下可能长时间挂起, 任何 await 放在绑定之前
+// 都会让导航和按钮在整个挂起期间点不动
+function bindUI() {
   for (const btn of document.querySelectorAll('.nav-item')) {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   }
@@ -1290,6 +1294,9 @@ async function boot() {
     tab.addEventListener('click', () => {
       for (const t of document.querySelectorAll('#downloadTabs .tab')) t.classList.toggle('active', t === tab);
       for (const p of document.querySelectorAll('.tab-panel')) p.classList.toggle('active', p.id === 'panel-' + tab.dataset.tab);
+      document.querySelector('.content').scrollTop = 0;
+      if (window.scrollY) window.scrollTo(0, 0);
+      if (tab.dataset.tab === 'vanilla') versionListView?.refresh();
     });
   }
   let searchTimer = 0;
@@ -1339,19 +1346,34 @@ async function boot() {
     zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove('over'); });
   }
   zone.addEventListener('drop', (e) => loadModpackFile(e.dataTransfer?.files?.[0]));
+}
 
-  try {
-    state.hashEngine = await HashEngine.load(new URL('../wasm/hash.wasm', import.meta.url).href);
-    log('WASM 哈希引擎已就绪 (CRC-32 / SHA-1 / CRC 合并)');
-  } catch (err) {
-    log('WASM 加载失败: ' + err.message, true);
-  }
+// 联网初始化: 三步互不依赖, 并发启动, 每一步单独兜底
+// 任何一步失败或卡住都不影响界面操作, 也不会拖住其他两步
+async function initRemote() {
+  // 内置凭据只影响 CurseForge 输入框的占位提示, 不重刷整个设置表单(那会覆盖用户这期间手动输入的值)
+  const credentials = loadBuiltinCredentials().catch(() => { /* 没有凭据文件属于正常情况 */ });
 
-  try {
-    await ensureManifest();
-  } catch {
-    setNet(false, '清单不可用');
-  }
+  const wasm = HashEngine.load(new URL('../wasm/hash.wasm', import.meta.url).href)
+    .then((engine) => {
+      state.hashEngine = engine;
+      log('WASM 哈希引擎已就绪 (CRC-32 / SHA-1 / CRC 合并)');
+    })
+    .catch((err) => log('WASM 加载失败: ' + err.message, true));
+
+  const manifest = ensureManifest()
+    .catch(() => setNet(false, '清单不可用'));
+
+  await Promise.all([credentials, wasm, manifest]);
+}
+
+function boot() {
+  applySettingsToForm();
+  rebuildSources();
+  bindSettings();
+  renderCapabilities();
+  bindUI();
+  initRemote();
 }
 
 window.__mcweb = state;
