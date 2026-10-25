@@ -1,0 +1,15 @@
+[package]
+name = "javapatch"
+version = "0.1.0"
+edition = "2021"
+description = "Minecraft Forge/NeoForge 二进制补丁引擎: LZMA 解压、GDIFF 增量还原、Adler32 校验"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

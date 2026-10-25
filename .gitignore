@@ -4,3 +4,7 @@ dist/
 config/keys.local.json
 .packs/
 /.idea/
+src/wasm/javapatch/target/
+/docs/
+/tools/
+**/**.log

@@ -9,12 +9,16 @@
     "serve": "node tools/serve.mjs",
     "verify": "node tools/node-verify.mjs",
     "wasm": "node tools/build-wasm.mjs",
+    "wasm:patch": "node tools/build-javapatch.mjs",
     "test:hash": "node tools/test-hash.mjs",
+    "test:gdiff": "node tools/test-gdiff.mjs",
+    "test:patch": "node tools/test-patch.mjs",
     "gateway": "node ../mc-gateway/server.js",
     "test:retry": "node tools/test-retry.mjs",
     "key": "node tools/extract-hmcl-key.mjs",
     "build": "node tools/build-dist.mjs",
-    "deploy": "npm run build && npx wrangler deploy"
+    "deploy": "npm run build && npx wrangler deploy",
+    "test:remap": "node tools/art-remap-test.mjs"
   },
   "devDependencies": {
     "wabt": "^1.0.39"

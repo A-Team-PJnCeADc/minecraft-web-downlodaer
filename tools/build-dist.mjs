@@ -1,7 +1,7 @@
 // 构建静态站点: 只把浏览器要用的文件拷进 dist/, 供 Cloudflare Workers 静态资源部署
 // 运行时读取的东西会一起带上: index.html、assets/、src/ (模块与 wasm)、config/*.example.json
 import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -12,7 +12,12 @@ await mkdir(dist, { recursive: true });
 
 await cp(join(root, 'index.html'), join(dist, 'index.html'));
 await cp(join(root, 'assets'), join(dist, 'assets'), { recursive: true });
-await cp(join(root, 'src'), join(dist, 'src'), { recursive: true });
+// jar 与 wasm 产物要随站点发布; Rust 源码目录(含 target/)只在开发期使用
+const crateDir = join(root, 'src', 'wasm', 'javapatch');
+await cp(join(root, 'src'), join(dist, 'src'), {
+  recursive: true,
+  filter: (source) => source !== crateDir && !source.startsWith(crateDir + sep),
+});
 
 // config 只带示例文件: keys.local.json 是本机凭据, 不能随站点发布
 await mkdir(join(dist, 'config'), { recursive: true });

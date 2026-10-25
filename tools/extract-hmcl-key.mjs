@@ -104,7 +104,7 @@ for (const file of gatewayFiles) {
     const next = text.replace(/const HMCL_FALLBACK_KEY = '[^']*';/, "const HMCL_FALLBACK_KEY = '" + key + "';");
     if (next !== text) {
       await writeFile(file, next);
-      console.log('已同步内置 key →', file);
+      console.log('已同步内置 key ->', file);
     }
   } catch {
     // 网关目录不存在时跳过
