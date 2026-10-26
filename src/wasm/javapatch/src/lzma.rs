@@ -178,6 +178,11 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>, String> {
         input[5], input[6], input[7], input[8], input[9], input[10], input[11], input[12],
     ]);
     let known_size = out_size != u64::MAX;
+    // 声明长度不可信: 超过上限直接拒绝, 未知长度也要有硬上限
+    const MAX_OUTPUT: u64 = 512 * 1024 * 1024;
+    if known_size && out_size > MAX_OUTPUT {
+        return Err(format!("LZMA 声明长度 {out_size} 超出上限 {MAX_OUTPUT}"));
+    }
 
     let mut rc = RangeDecoder::new(&input[13..])?;
 
@@ -195,7 +200,7 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>, String> {
     let mut literal = vec![PROB_INIT; 0x300usize << (lc + lp)];
 
     let mut out: Vec<u8> = Vec::with_capacity(if known_size {
-        out_size as usize
+        out_size.min(MAX_OUTPUT) as usize
     } else {
         1 << 23
     });
@@ -210,6 +215,9 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>, String> {
     loop {
         if known_size && out.len() as u64 == out_size {
             break;
+        }
+        if out.len() as u64 > MAX_OUTPUT {
+            return Err(format!("LZMA 输出超过上限 {MAX_OUTPUT} 字节"));
         }
         let pos_state = out.len() & pb_mask;
         let state_pos = state * NUM_POS_STATES_MAX + pos_state;
@@ -336,9 +344,13 @@ fn copy_match(out: &mut Vec<u8>, dist: u32, len: u32) -> Result<(), String> {
         ));
     }
     let start = out.len() - dist as usize - 1;
-    for i in 0..len as usize {
-        let b = out[start + i];
-        out.push(b);
+    // 重叠复制按"已有区间"分块, 每块一次批量拷贝
+    let mut remaining = len as usize;
+    while remaining > 0 {
+        let avail = out.len() - start;
+        let n = remaining.min(avail);
+        out.extend_from_within(start..start + n);
+        remaining -= n;
     }
     Ok(())
 }

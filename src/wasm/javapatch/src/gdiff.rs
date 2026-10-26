@@ -53,7 +53,7 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        if self.pos + n > self.buf.len() {
+        if n > self.buf.len() - self.pos {
             return Err("GDIFF 补丁数据提前结束".into());
         }
         let s = &self.buf[self.pos..self.pos + n];
@@ -103,14 +103,16 @@ pub fn apply(base: &[u8], delta: &[u8]) -> Result<Vec<u8>, String> {
                     COPY_LONG_INT => (r.u64()?, r.u32()? as usize),
                     _ => return Err(format!("GDIFF 未知命令: {cmd}")),
                 };
-                let start = offset as usize;
-                if start + length > base.len() {
+                let end = offset
+                    .checked_add(length as u64)
+                    .ok_or_else(|| "GDIFF 复制长度溢出".to_string())?;
+                if end > base.len() as u64 {
                     return Err(format!(
-                        "GDIFF 复制越界: 偏移 {start} 长度 {length} 超出源 {} 字节",
+                        "GDIFF 复制越界: 偏移 {offset} 长度 {length} 超出源 {} 字节",
                         base.len()
                     ));
                 }
-                out.extend_from_slice(&base[start..start + length]);
+                out.extend_from_slice(&base[offset as usize..end as usize]);
             }
         }
     }

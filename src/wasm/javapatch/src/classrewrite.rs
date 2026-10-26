@@ -25,12 +25,32 @@ const ACC_DEPRECATED: u32 = 0x20000;
 
 pub struct Maps {
     classes: HashMap<String, String>,
-    fields: HashMap<(String, String, String), String>,
-    methods: HashMap<(String, String, String), String>,
-    // (owner, name) -> 新名; 仅在没有歧义时填
-    methods_by_name: HashMap<(String, String), String>,
-    params: HashMap<(String, String, String), Vec<(u8, String)>>,
+    // 成员键统一用 "owner\0name\0desc" 单串, 查询时只分配一次
+    fields: HashMap<String, String>,
+    methods: HashMap<String, String>,
+    // "owner\0name" -> 新名; 仅在没有歧义时填
+    methods_by_name: HashMap<String, String>,
+    params: HashMap<String, Vec<(u8, String)>>,
     supers: HashMap<String, (Option<String>, Vec<String>)>,
+}
+
+// owner + name + desc 拼成单串键; 只在需要查表时分配一次
+fn member_key(owner: &str, name: &str, desc: &str) -> String {
+    let mut s = String::with_capacity(owner.len() + name.len() + desc.len() + 2);
+    s.push_str(owner);
+    s.push('\0');
+    s.push_str(name);
+    s.push('\0');
+    s.push_str(desc);
+    s
+}
+
+fn name_key(owner: &str, name: &str) -> String {
+    let mut s = String::with_capacity(owner.len() + name.len() + 1);
+    s.push_str(owner);
+    s.push('\0');
+    s.push_str(name);
+    s
 }
 
 impl Maps {
@@ -51,17 +71,17 @@ impl Maps {
             let n = r.string();
             let d = r.string();
             let t = r.string();
-            fields.insert((o, n, d), t);
+            fields.insert(member_key(&o, &n, &d), t);
         }
         let mut methods = HashMap::new();
-        let mut methods_by_name: HashMap<(String, String), String> = HashMap::new();
-        let mut ambiguous: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        let mut methods_by_name: HashMap<String, String> = HashMap::new();
+        let mut ambiguous: std::collections::HashSet<String> = std::collections::HashSet::new();
         for _ in 0..r.u4() {
             let o = r.string();
             let n = r.string();
             let d = r.string();
             let t = r.string();
-            let by_name = (o.clone(), n.clone());
+            let by_name = name_key(&o, &n);
             match methods_by_name.get(&by_name) {
                 Some(prev) if prev != &t => {
                     ambiguous.insert(by_name);
@@ -70,7 +90,7 @@ impl Maps {
                     methods_by_name.insert(by_name, t.clone());
                 }
             }
-            methods.insert((o, n, d), t);
+            methods.insert(member_key(&o, &n, &d), t);
         }
         for a in ambiguous {
             methods_by_name.remove(&a);
@@ -84,7 +104,7 @@ impl Maps {
                 let idx = r.u1();
                 let name = r.string();
                 params
-                    .entry((o, n, d))
+                    .entry(member_key(&o, &n, &d))
                     .or_insert_with(Vec::new)
                     .push((idx, name));
             }
@@ -139,7 +159,7 @@ impl Maps {
         }
         if let Some(v) = self
             .fields
-            .get(&(owner.to_string(), name.to_string(), desc.to_string()))
+            .get(&member_key(owner, name, desc))
         {
             return Some(v.clone());
         }
@@ -158,9 +178,13 @@ impl Maps {
         None
     }
 
+    pub fn params_of(&self, owner: &str, name: &str, desc: &str) -> Option<&Vec<(u8, String)>> {
+        self.params.get(&member_key(owner, name, desc))
+    }
+
     fn method_by_name(&self, owner: &str, name: &str) -> Option<String> {
         self.methods_by_name
-            .get(&(owner.to_string(), name.to_string()))
+            .get(&name_key(owner, name))
             .cloned()
     }
 
@@ -177,12 +201,9 @@ impl Maps {
             return None;
         }
         if depth == 0 && !inherit_methods() {
-            return self.methods.get(&(owner.to_string(), name.to_string(), desc.to_string())).cloned();
+            return self.methods.get(&member_key(owner, name, desc)).cloned();
         }
-        if let Some(v) = self
-            .methods
-            .get(&(owner.to_string(), name.to_string(), desc.to_string()))
-        {
+        if let Some(v) = self.methods.get(&member_key(owner, name, desc)) {
             return Some(v.clone());
         }
         if let Some((sup, ifaces)) = self.supers.get(owner) {
@@ -498,6 +519,18 @@ impl<'a> Cp<'a> {
             }
         }
         Ok(cp)
+    }
+
+    // 不加 clone 的读取: 供比较与只读用途
+    fn utf8_str(&self, idx: u16) -> &str {
+        self.strings
+            .get(idx as usize)
+            .and_then(|s| s.as_deref())
+            .unwrap_or("")
+    }
+
+    fn utf8_is(&self, idx: u16, s: &str) -> bool {
+        self.utf8_str(idx) == s
     }
 
     fn utf8_of(&self, idx: u16) -> String {
@@ -973,6 +1006,15 @@ fn read_type_annotation(
             q += 6;
         }
         p += 2 + 6 * n;
+    } else if let Some(m) = map.filter(|_| matches!(tt, 0x43..=0x4B)) {
+        // offset_target / type_argument_target 的 offset 是代码偏移, 布局变化时按新布局重算
+        let off = u2_at(class, p) as usize;
+        out.extend_from_slice(&(map_pc(m, off) as u16).to_be_bytes());
+        p += 2;
+        if !matches!(tt, 0x43..=0x46) {
+            out.push(class[p]);
+            p += 1;
+        }
     } else {
         let info = target_info_len(tt, class, p);
         out.extend_from_slice(&class[p..p + info]);
@@ -1127,7 +1169,7 @@ fn synthetic_param_prefix(cp: &Cp, class: &[u8], this_idx: u16, this_name: &str,
     for _ in 0..ac {
         let ni = u2_at(class, p);
         let alen = u32::from_be_bytes([class[p + 2], class[p + 3], class[p + 4], class[p + 5]]) as usize;
-        if cp.utf8_of(ni) == "InnerClasses" {
+        if cp.utf8_is(ni, "InnerClasses") {
             let n = u2_at(class, p + 6) as usize;
             let mut q = p + 8;
             for _ in 0..n {
@@ -1379,7 +1421,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     let mut signature: Option<String> = None;
     let mut deprecated = false;
     for a in &class_attrs {
-        match cp.utf8_of(a.name_idx).as_str() {
+        match cp.utf8_str(a.name_idx) {
             "Signature" => signature = Some(cp.utf8_of(u2_at(class, a.off))),
             "Deprecated" => deprecated = true,
             _ => {}
@@ -1419,14 +1461,14 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
 
     // 属性名提前入池只适用于 1.21.x(installertools); ART 的属性名在 toByteArray 末尾才登记
     if flags & FLAG_SRC_AT_WRITE != 0
-        && class_attrs.iter().any(|a| cp.utf8_of(a.name_idx) == "SourceFile")
+        && class_attrs.iter().any(|a| cp.utf8_is(a.name_idx, "SourceFile"))
     {
         cp.add_utf8("SourceFile");
     }
 
     // 按 ASM 的访问次序处理类属性
     fn attr_rank(cp: &Cp, a: &Attr) -> u32 {
-        match cp.utf8_of(a.name_idx).as_str() {
+        match cp.utf8_str(a.name_idx) {
             "SourceFile" => 10,
             "NestHost" => 20,
             "EnclosingMethod" => 30,
@@ -1447,7 +1489,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     let mut ordered: Vec<&Attr> = class_attrs.iter().collect();
     ordered.sort_by_key(|a| attr_rank(&cp, a));
     for a in ordered {
-        match cp.utf8_of(a.name_idx).as_str() {
+        match cp.utf8_str(a.name_idx) {
             "SourceFile" => {
                 let orig = cp.utf8_of(u2_at(class, a.off));
                 let name = if flags & FLAG_SRC_FIX != 0 {
@@ -1550,12 +1592,12 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
         let mut constant = None;
         let mut anns = Anns::default();
         for a in &f.attrs {
-            if cp.utf8_of(a.name_idx) == "Signature" && flags & FLAG_STRIP_SIGS == 0 {
+            if cp.utf8_is(a.name_idx, "Signature") && flags & FLAG_STRIP_SIGS == 0 {
                 sig_i = cp.add_utf8(&maps.signature(&cp.utf8_of(u2_at(class, a.off))));
             }
         }
         for a in &f.attrs {
-            match cp.utf8_of(a.name_idx).as_str() {
+            match cp.utf8_str(a.name_idx) {
                 "ConstantValue" => constant = Some(remap_constant(&mut cp, maps, u2_at(class, a.off))?),
                 "Signature" => {}
                 "Deprecated" => deprecated = true,
@@ -1626,8 +1668,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
         let mut exceptions = Vec::new();
         let slots = param_slots(&m.desc, m.access & 0x0008 != 0);
         let mapped_params: Vec<(u16, String)> = maps
-            .params
-            .get(&(this_name.clone(), m.name.clone(), m.desc.clone()))
+            .params_of(&this_name, &m.name, &m.desc)
             .map(|list| {
                 list.iter()
                     .filter_map(|(i, name)| slots.get(*i as usize).map(|s| (*s, name.clone())))
@@ -1642,12 +1683,12 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
         let mut method_params = None;
         // visitMethod 的参数顺序: name, desc, signature, exceptions
         for a in &m.attrs {
-            if cp.utf8_of(a.name_idx) == "Signature" && flags & FLAG_STRIP_SIGS == 0 {
+            if cp.utf8_is(a.name_idx, "Signature") && flags & FLAG_STRIP_SIGS == 0 {
                 sig_i = cp.add_utf8(&maps.signature(&cp.utf8_of(u2_at(class, a.off))));
             }
         }
         for a in &m.attrs {
-            if cp.utf8_of(a.name_idx) == "Exceptions" {
+            if cp.utf8_is(a.name_idx, "Exceptions") {
                 let n = u2_at(class, a.off) as usize;
                 for k in 0..n {
                     let idx = u2_at(class, a.off + 2 + k * 2);
@@ -1667,7 +1708,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
         let mut pi_off: Option<usize> = None;
         let mut code_off: Option<usize> = None;
         for a in &m.attrs {
-            match cp.utf8_of(a.name_idx).as_str() {
+            match cp.utf8_str(a.name_idx) {
                 "Code" => code_off = Some(a.off),
                 "Exceptions" | "Signature" => {}
                 "Deprecated" => deprecated = true,
@@ -2391,7 +2432,7 @@ fn remap_code(
         for _ in 0..ac {
             let ni = u2_at(class, q);
             let alen = u32::from_be_bytes([class[q+2], class[q+3], class[q+4], class[q+5]]) as usize;
-            if cp.utf8_of(ni) == "StackMapTable" {
+            if cp.utf8_is(ni, "StackMapTable") {
                 frames_at = scan_smt_types(class, q + 6, alen);
             }
             q += 6 + alen;
