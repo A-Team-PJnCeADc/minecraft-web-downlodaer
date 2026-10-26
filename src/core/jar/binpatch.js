@@ -133,16 +133,20 @@ export async function inflateRawBytes(bytes) {
 
 // 对 clean 条目表应用补丁; items 为 Map<name, Uint8Array>, 返回新的 Map
 // 校验失败立即抛错(GDIFF 的复制指令依赖精确的基线字节)
-export function applyPatches(engine, items, parsed, { baseType = BASE_CLIENT, strict = true } = {}) {
+export function applyPatches(engine, items, parsed, { baseType = BASE_CLIENT, strict = true, shouldAbort = null } = {}) {
   const out = new Map(items);
   const stats = { patched: 0, created: 0, removed: 0, copied: 0, failed: 0 };
   const failures = [];
   const patches = parsed.patches;
+  let seen = 0;
   for (const patch of patches) {
+    // 每 64 条检查一次取消, 让大批量补丁可以中途停下
+    if (shouldAbort && (seen++ & 63) === 0) shouldAbort();
     if (patch.baseTypes !== undefined && (patch.baseTypes & baseType) === 0) continue;
-    // 经典格式的类名可能是点号分隔, 统一成 jar 内的路径
-    const key = patch.path.includes('/') ? patch.path : patch.path.replace(/\./g, '/');
-    const name = key.endsWith('.class') ? key : key + '.class';
+    // 经典格式只装类, 名字是点号分隔的类名; 新格式带的是 jar 内真实路径(可能不是 class)
+    const classic = patch.format === 'classic';
+    const key = classic && !patch.path.includes('/') ? patch.path.replace(/\./g, '/') : patch.path;
+    const name = classic && !key.endsWith('.class') ? key + '.class' : key;
     const existing = out.get(name);
 
     if (patch.operation === ENTRY_REMOVE) {

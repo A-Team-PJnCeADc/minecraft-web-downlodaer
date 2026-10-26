@@ -45,14 +45,37 @@ export const MIRROR_RULES = [
   { source: 'http://files.minecraftforge.net/maven', target: '{root}/maven' },
   { source: 'https://files.minecraftforge.net/maven', target: '{root}/maven' },
   { source: 'https://maven.minecraftforge.net', target: '{root}/maven' },
-  { source: 'https://maven.neoforged.net/releases/', target: '{root}/maven/' },
+  // NeoForge: bmcl 镜像之外, 官方内容在 neoforged.forgecdn.net 上也有一份(带 ACAO), 恒追加
+  {
+    source: 'https://maven.neoforged.net/releases/',
+    target: '{root}/maven/',
+    extras: ['https://neoforged.forgecdn.net/releases/'],
+  },
   { source: 'http://dl.liteloader.com/versions', target: '{root}/maven' },
   { source: 'https://dl.liteloader.com/versions', target: '{root}/maven' },
   { source: 'https://meta.fabricmc.net', target: '{root}/fabric-meta' },
   { source: 'https://maven.fabricmc.net', target: '{root}/maven' },
   { source: 'https://authlib-injector.yushi.moe', target: '{root}/mirrors/authlib-injector' },
-  { source: 'https://repo1.maven.org/maven2', target: 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public' },
-  { source: 'https://repo.maven.apache.org/maven2', target: 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public' },
+  // 中央库在国内没有带 ACAO 的镜像: 阿里云/华为云/腾讯云都不返回 ACAO, 只在网关或关闭同源策略时可用
+  {
+    source: 'https://repo1.maven.org/maven2',
+    targets: [
+      'https://maven.aliyun.com/repository/public',
+      'https://repo.huaweicloud.com/repository/maven',
+      'https://mirrors.cloud.tencent.com/nexus/repository/maven-public',
+    ],
+  },
+  { source: 'https://hmcl.glavo.site/metadata/cleanroom', target: 'https://alist.8mi.tech/d/mirror/HMCL-Metadata/Auto/cleanroom' },
+  { source: 'https://hmcl.glavo.site/metadata/fmllibs', target: 'https://alist.8mi.tech/d/mirror/HMCL-Metadata/Auto/fmllibs' },
+  { source: 'https://zkitefly.github.io/unlisted-versions-of-minecraft', target: 'https://alist.8mi.tech/d/mirror/unlisted-versions-of-minecraft/Auto' },
+  {
+    source: 'https://repo.maven.apache.org/maven2',
+    targets: [
+      'https://maven.aliyun.com/repository/public',
+      'https://repo.huaweicloud.com/repository/maven',
+      'https://mirrors.cloud.tencent.com/nexus/repository/maven-public',
+    ],
+  },
   { source: 'https://api.modrinth.com', target: 'https://mod.mcimirror.top/modrinth', fallback: true },
   { source: 'https://cdn.modrinth.com', target: 'https://mod.mcimirror.top', fallback: true },
   { source: 'https://api.curseforge.com', target: 'https://mod.mcimirror.top/curseforge', fallback: true },
@@ -115,6 +138,86 @@ export const MIRROR_SITES = {
   },
 };
 
+
+// 下载源分组: 高级设置里可自由开关, 关掉的组不会出现在任何候选链里
+export const SOURCE_GROUPS = [
+  {
+    id: 'mojang',
+    label: '官方（Mojang）',
+    hosts: [
+      { h: 'piston-meta.mojang.com', n: 'piston-meta（版本清单/json/资源索引）' },
+      { h: 'piston-data.mojang.com', n: 'piston-data（客户端 jar）' },
+      { h: 'launchermeta.mojang.com', n: 'launchermeta（清单备用）' },
+      { h: 'launcher.mojang.com', n: 'launcher.mojang（旧下载地址）' },
+      { h: 'resources.download.minecraft.net', n: 'resources（资源对象）' },
+      { h: 'libraries.minecraft.net', n: 'libraries（运行库）' },
+    ],
+  },
+  { id: 'bmclapi', label: 'BMCLAPI 全结构镜像', hosts: [{ h: 'bmclapi2.bangbang93.com', n: 'bmclapi2.bangbang93.com' }] },
+  {
+    id: 'campus',
+    label: '高校镜像（maven 子树）',
+    hosts: [
+      { h: 'mirrors.sjtug.sjtu.edu.cn', n: 'SJTU（上海交大）' },
+      { h: 'mirror.nju.edu.cn', n: 'NJU（南京大学）' },
+      { h: 'mirrors.zju.edu.cn', n: 'ZJU（浙江大学）' },
+      { h: 'mirrors.cernet.edu.cn', n: 'CERNET（教育网）' },
+      { h: 'mirrors.ustc.edu.cn', n: 'USTC（中科大）' },
+    ],
+  },
+  { id: 'forgecdn', label: 'NeoForged CDN', hosts: [{ h: 'neoforged.forgecdn.net', n: 'neoforged.forgecdn.net' }] },
+  {
+    id: 'loadermaven',
+    label: '加载器 maven',
+    hosts: [
+      { h: 'maven.minecraftforge.net', n: 'Forge maven' },
+      { h: 'files.minecraftforge.net', n: 'Forge 旧 maven' },
+      { h: 'maven.neoforged.net', n: 'NeoForge maven' },
+      { h: 'maven.fabricmc.net', n: 'Fabric maven' },
+      { h: 'meta.fabricmc.net', n: 'Fabric meta' },
+      { h: 'meta.quiltmc.org', n: 'Quilt meta' },
+      { h: 'maven.quiltmc.org', n: 'Quilt maven' },
+      { h: 'meta.legacyfabric.net', n: 'Legacy Fabric meta' },
+      { h: 'repo.spongepowered.org', n: 'Sponge（Mixin 库代理）' },
+      { h: 'dl.liteloader.com', n: 'LiteLoader' },
+      { h: 'maven.izzel.io', n: 'izzel maven' },
+      { h: 'maven.terraformersmc.com', n: 'TerraformersMC maven' },
+      { h: 'repo.sleeping.town', n: 'sleeping.town maven' },
+    ],
+  },
+  {
+    id: 'central',
+    label: '中央库镜像',
+    hosts: [
+      { h: 'maven.aliyun.com', n: '阿里云' },
+      { h: 'repo.huaweicloud.com', n: '华为云' },
+      { h: 'mirrors.cloud.tencent.com', n: '腾讯云' },
+      { h: 'repo1.maven.org', n: 'Maven Central（原始）' },
+    ],
+  },
+  {
+    id: 'assetsfallback',
+    label: '资源兜底 CDN',
+    hosts: [
+      { h: 'assets.mcasset.cloud', n: 'mcasset' },
+      { h: 'cdn.jsdelivr.net', n: 'jsDelivr' },
+      { h: 'raw.githubusercontent.com', n: 'GitHub raw' },
+      { h: 'gh-proxy.org', n: 'gh-proxy' },
+    ],
+  },
+  {
+    id: 'mods',
+    label: '模组 CDN',
+    hosts: [
+      { h: 'api.modrinth.com', n: 'Modrinth API' },
+      { h: 'cdn.modrinth.com', n: 'Modrinth CDN' },
+      { h: 'edge.forgecdn.net', n: 'CurseForge（edge）' },
+      { h: 'mediafilez.forgecdn.net', n: 'CurseForge（mediafilez）' },
+      { h: 'mod.mcimirror.top', n: 'mcimirror 镜像' },
+    ],
+  },
+];
+
 export const DEFAULT_MIRROR_SITE = 'bmclapi';
 
 // 探测当前浏览器是否已关闭同源策略(本机 Chrome 以 --disable-web-security --user-data-dir=... 启动)
@@ -149,7 +252,8 @@ const CORS_HOSTS = [
   'cdn.modrinth.com', 'edge.forgecdn.net', 'mediafilez.forgecdn.net',
   'assets.mcasset.cloud', 'cdn.jsdelivr.net', 'piston-meta.mojang.com',
   'piston-data.mojang.com', 'mod.mcimirror.top', 'meta.fabricmc.net',
-  'meta.quiltmc.org', 'meta.legacyfabric.net', 'mirrors.cloud.tencent.com',
+  'meta.quiltmc.org', 'meta.legacyfabric.net', 'launchermeta.mojang.com',
+  'neoforged.forgecdn.net',
 ];
 
 // 实测不返回 ACAO 的主机(无网关时不可用于浏览器)
@@ -157,15 +261,16 @@ const CORS_HOSTS = [
 const NO_CORS_HOSTS = [
   'libraries.minecraft.net', 'resources.download.minecraft.net',
   'bmclapi2.bangbang93.com', 'mirror.nju.edu.cn', 'mirrors.cernet.edu.cn',
-  'bmclapi.hurtmc.com', 'launcher.mojang.com', 'launchermeta.mojang.com',
+  'bmclapi.hurtmc.com', 'launcher.mojang.com',
   'mirrors.zju.edu.cn', 'mirrors.ustc.edu.cn', 'mirrors.sjtug.sjtu.edu.cn',
+  'mirrors.cloud.tencent.com', 'maven.aliyun.com', 'repo.huaweicloud.com',
 ];
 
 // 网关代理由两类主机使用: 官方不带 ACAO 的 CDN(恒用), 以及当前选中镜像站的根(镜像站在浏览器内都不带 ACAO)
 // 自带 CORS 的主机(piston、Sponge、各 maven、mcasset、Modrinth/CurseForge)一律直连, 不经网关
 export const GATEWAY_HOSTS = [
   'libraries.minecraft.net', 'resources.download.minecraft.net',
-  'launcher.mojang.com', 'launchermeta.mojang.com',
+  'launcher.mojang.com',
 ];
 
 // 默认 CORS 网关(公开部署的 EdgeOne Makers 实例): 用户可在设置里换成自己的
@@ -249,6 +354,12 @@ export class Sources {
     this.mirrorRoot = config.mirrorRoot || '';
     // 本机 Chrome 用 --disable-web-security 启动时关闭同源策略: 不再需要网关, 也不剔除无 ACAO 的主机
     this.noCors = Boolean(config.noCors);
+    // 高级设置: 只保留被勾选的分组(默认全开)
+    const enabled = Array.isArray(config.enabledGroups) && config.enabledGroups.length
+      ? config.enabledGroups
+      : SOURCE_GROUPS.map((g) => g.id);
+    this.enabledGroups = new Set(enabled);
+    this.disabledHosts = new Set(Array.isArray(config.disabledHosts) ? config.disabledHosts : []);
     this.ghProxy = config.ghProxy === undefined ? DEFAULT_GH_PROXY : config.ghProxy;
     this.gateway = config.gateway === undefined ? DEFAULT_GATEWAY : config.gateway;
     this.libraryProxy = config.libraryProxy ?? BROWSER_LIBRARY_PROXY;
@@ -334,12 +445,16 @@ export class Sources {
     if (!best) return null;
     const rest = url.slice(best.source.length);
     const mirrors = [];
-    for (const root of this.siteRoots) {
-      const target = best.target.replace('{root}', root);
-      const mirror = target + rest;
-      if (!mirrors.includes(mirror)) mirrors.push(mirror);
+    const targets = best.targets || (best.target ? [best.target] : []);
+    for (const raw of targets) {
+      for (const root of this.siteRoots) {
+        const target = raw.replace('{root}', root);
+        const mirror = target + rest;
+        if (!mirrors.includes(mirror)) mirrors.push(mirror);
+      }
     }
-    return { mirrors, fallback: Boolean(best.fallback) };
+    const extras = (best.extras || []).map((prefix) => prefix + rest);
+    return { mirrors, extras, fallback: Boolean(best.fallback) };
   }
 
   // 把一组官方地址展开成候选链; kind: 'file' | 'meta'
@@ -356,6 +471,8 @@ export class Sources {
         : (rule.fallback ? false : this.preferMirror);
       if (mirrorFirst) out.push(...rule.mirrors, url);
       else out.push(url, ...rule.mirrors);
+      // 额外 CDN(如 neoforged.forgecdn.net) 恒排在最后, 作为兜底来源
+      if (rule.extras?.length) out.push(...rule.extras);
     }
     return this.normalize(out);
   }
@@ -371,10 +488,35 @@ export class Sources {
   }
 
   // 去重、按 CORS 能力过滤或加网关、按历史成功率排序
+  // 主机归组; 未登记的主机视为常开(用户填的自定义根等)
+  hostGroup(host) {
+    for (const g of SOURCE_GROUPS) {
+      if (g.hosts.some((x) => host === x.h || host.endsWith('.' + x.h))) return g;
+    }
+    return null;
+  }
+
+  hostEnabled(url) {
+    try {
+      const host = new URL(url).host;
+      const group = this.hostGroup(host);
+      if (!group) return true;
+      if (!this.enabledGroups.has(group.id)) return false;
+      // 组内再做主机级筛选
+      for (const x of group.hosts) {
+        if (host === x.h || host.endsWith('.' + x.h)) return !this.disabledHosts.has(x.h);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
   normalize(urls) {
     const list = [];
     for (const url of urls) {
       if (!url) continue;
+      if (!this.hostEnabled(url)) continue;
       if (this.isBrowser && !this.noCors) {
         // 官方两个 CDN 无 ACAO: 有网关才包一层, 没网关就直接剔除
         if (this.hostNeedsGateway(url)) {
@@ -466,7 +608,10 @@ export class Sources {
     const rule = this.applyRule(url);
     if (!rule) return [url];
     const mirrorFirst = meta ? this.mode === 'mirror' : (rule.fallback ? false : this.preferMirror);
-    return mirrorFirst ? [...rule.mirrors, url] : [url, ...rule.mirrors];
+    const ordered = mirrorFirst ? [...rule.mirrors, url] : [url, ...rule.mirrors];
+    // 额外 CDN(如 neoforged.forgecdn.net) 恒排最后
+    if (rule.extras?.length) ordered.push(...rule.extras);
+    return ordered;
   }
 
   // 取 maven 相对路径: 用于在其它镜像站上构造同一构件的地址
@@ -543,22 +688,134 @@ export class Sources {
     return this.normalize(this.expandRaw(url, true));
   }
 
+  // maven-metadata.xml: 本身带 CORS 就直连, 同时给出镜像站对应路径供并发探测
+  mavenMetadataCandidates(url) {
+    const out = [];
+    const push = (u) => { if (u && !out.includes(u)) out.push(u); };
+    if (this.hostHasCors(url) || this.noCors) push(url);
+    for (const candidate of this.altMavenCandidates(url)) push(candidate);
+    push(url);
+    // 额外 CDN(neoforged.forgecdn.net) 同样适用于元数据
+    const rule = this.applyRule(url);
+    for (const extra of rule?.extras || []) push(extra);
+    return out.filter((u) => this.hostEnabled(u));
+  }
+
   versionJsonCandidates(entry) {
     return this.metaCandidates(entry.url);
   }
 }
 
-export async function loadVersionManifest(sources) {
-  const candidates = sources.metaCandidates(sources.config.versionManifest);
-  let lastError;
-  for (const url of candidates) {
-    try {
-      return await fetchJson(url);
-    } catch (err) {
-      lastError = err;
+
+// 小文件并发探测: 先发第一个, hedgeMs 内没回来就再开一个候选源, 谁先成功用谁
+// 解决"某个镜像站挂起 -> 单源等到超时再换"的串联等待
+export async function fetchTextFast(urls, { timeout = 12000, hedgeMs = 2500 } = {}) {
+  if (!urls.length) throw new Error('没有候选地址');
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    let launched = 0;
+    let failed = 0;
+    let lastErr = null;
+    const timers = new Set();
+    const inflight = new Set();
+    // 成功即中止其余候选, 不白耗带宽
+    const cleanup = () => {
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
+      for (const c of inflight) c.abort();
+      inflight.clear();
+    };
+    const settle = (fn, value) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      fn(value);
+    };
+    const retried = new Set();
+    const launch = () => {
+      if (finished || launched >= urls.length) return;
+      const url = urls[launched++];
+      const controller = new AbortController();
+      inflight.add(controller);
+      const timer = setTimeout(() => controller.abort(), timeout);
+      timers.add(timer);
+      fetch(url, { signal: controller.signal, mode: 'cors', credentials: 'omit' })
+        .then(async (res) => {
+          if (!res.ok) {
+            // 限流/临时不可用: 同一地址稍后重试一次, 不直接判死
+            if ((res.status === 429 || res.status === 503) && !retried.has(url)) {
+              retried.add(url);
+              await new Promise((r) => setTimeout(r, 800));
+              if (!finished) {
+                const again = new AbortController();
+                inflight.add(again);
+                const resp = await fetch(url, { signal: again.signal, mode: 'cors', credentials: 'omit' });
+                if (resp.ok) return resp.text();
+              }
+            }
+            throw new HttpError('HTTP ' + res.status + ' ' + url, res.status, url);
+          }
+          return res.text();
+        })
+        .then((text) => {
+          clearTimeout(timer);
+          timers.delete(timer);
+          inflight.delete(controller);
+          settle(resolve, { url, text });
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          timers.delete(timer);
+          inflight.delete(controller);
+          lastErr = err;
+          failed++;
+          if (finished) return;
+          if (failed >= urls.length) { settle(reject, lastErr); return; }
+          launch();
+        });
+      if (launched < urls.length) {
+        const hedge = setTimeout(() => {
+          timers.delete(hedge);
+          if (!finished) launch();
+        }, hedgeMs);
+        timers.add(hedge);
+      }
+    };
+    launch();
+  });
+}
+
+// 元数据缓存: 清单与 maven-metadata 变动慢, 命中就不发请求
+const META_CACHE_KEY = 'mcweb.metaCache.v1';
+function metaCacheGet(key, ttl) {
+  try {
+    const all = JSON.parse(globalThis.localStorage?.getItem(META_CACHE_KEY) || '{}');
+    const hit = all[key];
+    if (hit && Date.now() - hit.at < ttl) return hit.value;
+  } catch { }
+  return null;
+}
+function metaCachePut(key, value) {
+  try {
+    const all = JSON.parse(globalThis.localStorage?.getItem(META_CACHE_KEY) || '{}');
+    all[key] = { at: Date.now(), value };
+    const keys = Object.keys(all);
+    if (keys.length > 30) {
+      keys.sort((a, b) => all[a].at - all[b].at);
+      for (const k of keys.slice(0, keys.length - 30)) delete all[k];
     }
-  }
-  throw lastError;
+    globalThis.localStorage?.setItem(META_CACHE_KEY, JSON.stringify(all));
+  } catch { }
+}
+
+export async function loadVersionManifest(sources) {
+  const cached = metaCacheGet('manifest', 10 * 60 * 1000);
+  if (cached) return cached;
+  const candidates = sources.metaCandidates(sources.config.versionManifest);
+  const { text } = await fetchTextFast(candidates, { timeout: 12000, hedgeMs: 2000 });
+  const manifest = JSON.parse(text);
+  metaCachePut('manifest', manifest);
+  return manifest;
 }
 
 export async function loadVersionJson(sources, entry) {
@@ -627,14 +884,51 @@ export async function loadFabricLoaderVersions(sources, type, gameVersion) {
   throw lastError;
 }
 
-export async function loadMavenVersions(url) {
-  const res = await fetchWithRetry(url);
-  const xml = await res.text();
-  return [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]);
+export async function loadMavenVersions(urls, { ttl = 30 * 60 * 1000 } = {}) {
+  const list = Array.isArray(urls) ? urls : [urls];
+  const key = 'maven:' + list[0];
+  const cached = metaCacheGet(key, ttl);
+  if (cached) return cached;
+  const { text } = await fetchTextFast(list, { timeout: 15000, hedgeMs: 2500 });
+  const versions = [...text.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]);
+  if (versions.length) metaCachePut(key, versions);
+  return versions;
+}
+
+// BMCL 的列表接口: 只返回版本号与文件清单, 比 maven-metadata.xml 小一个量级
+async function bmclList(sources, path, ttl = 10 * 60 * 1000) {
+  if (!sources.bmclRoot) return null;
+  const urls = sources.dataUrlCandidates(sources.bmclRoot + path);
+  if (!urls.length) return null;
+  const key = 'bmcl:' + path;
+  const cached = metaCacheGet(key, ttl);
+  if (cached) return cached;
+  const { text } = await fetchTextFast(urls, { timeout: 8000, hedgeMs: 1200 });
+  const data = JSON.parse(text);
+  if (Array.isArray(data) && data.length) metaCachePut(key, data);
+  return Array.isArray(data) ? data : null;
 }
 
 export async function loadForgeVersions(sources, gameVersion) {
-  const all = await loadMavenVersions(sources.config.forgeMaven + '/net/minecraftforge/forge/maven-metadata.xml');
+  try {
+    const list = await bmclList(sources, '/forge/minecraft/' + encodeURIComponent(gameVersion));
+    if (list?.length) {
+      const out = [];
+      for (const item of list) {
+        const v = item?.version;
+        if (!v) continue;
+        // 带 branch 的旧版(maven 里是 <mcver>-<ver>-<branch>)
+        out.push(item.branch ? `${v}-${item.branch}` : String(v));
+      }
+      if (out.length) return out.reverse();
+    }
+  } catch { /* 落到 maven 元数据 */ }
+  return forgeVersionsFromMaven(sources, gameVersion);
+}
+
+async function forgeVersionsFromMaven(sources, gameVersion) {
+  const meta = sources.config.forgeMaven + '/net/minecraftforge/forge/maven-metadata.xml';
+  const all = await loadMavenVersions(sources.mavenMetadataCandidates(meta));
   return all
     .filter((v) => v.startsWith(gameVersion + '-'))
     .map((v) => v.slice(gameVersion.length + 1))
@@ -642,7 +936,19 @@ export async function loadForgeVersions(sources, gameVersion) {
 }
 
 export async function loadNeoForgeVersions(sources, gameVersion) {
-  const all = await loadMavenVersions(sources.config.neoforgeMaven + '/net/neoforged/neoforge/maven-metadata.xml');
+  try {
+    const list = await bmclList(sources, '/neoforge/list/' + encodeURIComponent(gameVersion));
+    if (list?.length) {
+      const out = list.map((x) => String(x?.version || x?.rawVersion || '').replace(/^neoforge-/, '')).filter(Boolean);
+      if (out.length) return out.reverse();
+    }
+  } catch { /* 落到 maven 元数据 */ }
+  return neoForgeVersionsFromMaven(sources, gameVersion);
+}
+
+async function neoForgeVersionsFromMaven(sources, gameVersion) {
+  const meta = sources.config.neoforgeMaven + '/net/neoforged/neoforge/maven-metadata.xml';
+  const all = await loadMavenVersions(sources.mavenMetadataCandidates(meta));
   const [major, minor] = gameVersion.split('.');
   const prefix = `${major}.${minor}.`;
   return all.filter((v) => v.startsWith(prefix)).reverse();

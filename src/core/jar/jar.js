@@ -30,7 +30,8 @@ async function deflateRawBytes(bytes, level = 6) {
 }
 
 // 读取 jar: 返回条目顺序与内容
-export async function readJar(bytes) {
+export async function readJar(bytes, { cancel = null, signal = null } = {}) {
+  const bus = cancel || (signal ? { get cancelled() { return signal.aborted; }, throwIfCancelled() { if (signal.aborted) { const e = new Error('已取消'); e.name = 'AbortError'; throw e; } } } : null);
   const zip = await new ZipReader({
     size: bytes.length,
     readAt: async (offset, length) => bytes.subarray(offset, offset + length),
@@ -38,7 +39,11 @@ export async function readJar(bytes) {
   }).open();
   const order = [];
   const entries = new Map();
+  let seen = 0;
   for (const entry of zip.list()) {
+    // 大 jar 解包要几秒, 每 1024 条让出一次事件循环并检查取消
+    bus?.throwIfCancelled?.();
+    if ((seen++ & 1023) === 0) await Promise.resolve();
     const data = await zip.readEntry(entry);
     order.push(entry.name);
     entries.set(entry.name, data);

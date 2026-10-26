@@ -6,6 +6,7 @@
 import { readJar, writeJar } from '../jar/jar.js';
 import { readPatchArchive, applyPatches } from '../jar/binpatch.js';
 import { ZipReader } from '../zip/reader.js';
+import { asCancel } from '../dl/cancel.js';
 
 // 各版本家族对应的重写器参数(实测逐类字节一致时使用的取值)
 export function chainSpecFor(gameVersion) {
@@ -419,12 +420,59 @@ export function remapEntries(engine, entries, blob, flags, onProgress, classMap 
   return out;
 }
 
+// 取消: 阶段之间、每类、每批补丁都要问一次总线
+function checkCancel(cancel) {
+  cancel?.throwIfCancelled?.();
+}
+
+// 原版 jar 带 Mojang 签名(META-INF/*.SF/*.RSA), 改过类之后必须去掉, 否则 FML 启动时报 SHA-384 digest error
+function stripSignatures(entries) {
+  const out = new Map();
+  for (const [name, data] of entries) {
+    if (/^META-INF\/(SIG-[^/]*|[^/]*\.(SF|RSA|DSA|EC))$/i.test(name)) continue;
+    out.set(name, data);
+  }
+  return out;
+}
+
+// bundler jar 里内层的客户端 jar
+function bundlerClient(entries) {
+  for (const [name, data] of entries) {
+    if (/^versions\/[^/]+\/client\.jar$/.test(name)) return data;
+  }
+  return null;
+}
+
 // 完整链路: 原版 jar + 映射 + binpatch -> 打过补丁的 jar
 export async function applyForgeChain(options) {
-  const { engine, clientJar, mappingsText = null, mojmapText = null, patchBytes, spec, onStatus = null } = options;
+  const { engine, clientJar, mappingsText = null, mojmapText = null, patchBytes, spec, onStatus = null, cancel: rawCancel = null, signal = null } = options;
+  const cancel = asCancel(rawCancel || signal);
   const mode = spec.mappings || (mojmapText ? 'merged' : 'joined');
-  onStatus?.('解析映射表');
-  const client = await readJar(clientJar);
+  checkCancel(cancel);
+  onStatus?.('读取客户端 jar');
+  const client = await readJar(clientJar, { cancel });
+  checkCancel(cancel);
+  // bundler 里带的是 versions/<ver>/client.jar, 26.x 的补丁基线是它
+  let entries = client.entries;
+  const inner = bundlerClient(entries);
+  if (inner) {
+    onStatus?.('解包 bundler');
+    entries = (await readJar(inner, { cancel })).entries;
+    checkCancel(cancel);
+  }
+  entries = stripSignatures(entries);
+  if (mode === 'none') {
+    onStatus?.('解析补丁');
+    const archive = await readPatchArchive(engine, patchBytes);
+    checkCancel(cancel);
+    onStatus?.('应用补丁');
+    const result = applyPatches(engine, entries, archive, { strict: true, shouldAbort: () => checkCancel(cancel) });
+    if (result.stats.failed?.length) {
+      throw new Error(`补丁基线校验失败 ${result.stats.failed.length} 项: ${result.stats.failed[0]}`);
+    }
+    onStatus?.('写出 jar');
+    return { jar: await writeJar(result.items), remapped: entries, stats: result.stats };
+  }
   let blob;
   let classMap = null;
   if (mode === 'mojmap') {
@@ -440,17 +488,21 @@ export async function applyForgeChain(options) {
       : mappingsText;
     const parsed = parseMappings(text, { invert: spec.invert });
     onStatus?.('构建映射');
-    blob = buildMapsBlob(parsed, client.entries);
+    blob = buildMapsBlob(parsed, entries);
     classMap = parsed.classes;
   }
+  checkCancel(cancel);
   onStatus?.('改名字节码');
-  const remapped = remapEntries(engine, client.entries, blob, spec.flags, (done, total) => {
+  const remapped = remapEntries(engine, entries, blob, spec.flags, (done, total) => {
+    checkCancel(cancel);
     onStatus?.(`改名 ${done}/${total}`);
   }, classMap);
   if (!patchBytes) return { jar: await writeJar(remapped), remapped };
-  onStatus?.('应用补丁');
+  onStatus?.('解析补丁');
   const archive = await readPatchArchive(engine, patchBytes);
-  const result = applyPatches(engine, remapped, archive, { strict: true });
+  checkCancel(cancel);
+  onStatus?.('应用补丁');
+  const result = applyPatches(engine, remapped, archive, { strict: true, shouldAbort: () => checkCancel(cancel) });
   if (result.stats.failed?.length) {
     throw new Error(`补丁基线校验失败 ${result.stats.failed.length} 项: ${result.stats.failed[0]}`);
   }
@@ -459,29 +511,41 @@ export async function applyForgeChain(options) {
 }
 
 // 按计划执行: 取回客户端 jar、MCP 配置、官方映射与补丁, 产出打过补丁的 jar
-export async function runPlannedChain(plan, { engine, onStatus = null, fetchBytes }) {
+export async function runPlannedChain(plan, { engine, onStatus = null, fetchBytes, clientBytes: preloaded = null, cancel: rawCancel = null, signal = null }) {
+  const cancel = asCancel(rawCancel || signal);
   const chain = plan.forgeChain;
   if (!chain) throw new Error('计划里没有补丁链');
-  const zip = plan.forgeInfo?.zip;
+  // 安装器字节可能没在内存里(描述来自缓存): 按需取一次, 之后复用
+  let zip = plan.forgeInfo?.zip;
+  if (!zip && plan.forgeInfo?.openZip) {
+    onStatus?.('取回安装器');
+    zip = await plan.forgeInfo.openZip();
+    if (plan.forgeInfo) plan.forgeInfo.zip = zip;
+  }
   if (!zip) throw new Error('缺少安装器 zip');
   const mode = chain.spec.mappings || 'merged';
   if (!chain.client?.urls?.length) throw new Error('缺少客户端 jar 地址');
 
-  onStatus?.('取回客户端 jar');
-  const clientBytes = await fetchBytes(chain.client.urls, chain.client);
+  checkCancel(cancel);
+  // 调用方可以先下载原版再把字节传进来, 这样"下载原版"和"安装加载器"在界面上是两步
+  let clientBytes = preloaded;
+  if (!clientBytes) {
+    onStatus?.('取回客户端 jar');
+    clientBytes = await fetchBytes(chain.client.urls, chain.client, '客户端 jar');
+  }
 
   let mojmapText = null;
-  if (mode !== 'joined') {
+  if (mode !== 'joined' && mode !== 'none') {
     if (!chain.mojmap?.urls?.length) throw new Error('缺少官方映射地址');
     onStatus?.('取回官方映射');
-    mojmapText = new TextDecoder().decode(await fetchBytes(chain.mojmap.urls, chain.mojmap));
+    mojmapText = new TextDecoder().decode(await fetchBytes(chain.mojmap.urls, chain.mojmap, '官方映射'));
   }
 
   let joinedText = null;
-  if (mode !== 'mojmap') {
+  if (mode !== 'mojmap' && mode !== 'none') {
     if (!chain.mcpConfig?.urls?.length) throw new Error('缺少 MCP 配置地址');
     onStatus?.('取回 MCP 配置');
-    const mcpBytes = await fetchBytes(chain.mcpConfig.urls, chain.mcpConfig);
+    const mcpBytes = await fetchBytes(chain.mcpConfig.urls, chain.mcpConfig, 'MCP 配置');
     const mcpZip = await new ZipReader({
       size: mcpBytes.length,
       readAt: async (offset, length) => mcpBytes.subarray(offset, offset + length),
@@ -496,6 +560,7 @@ export async function runPlannedChain(plan, { engine, onStatus = null, fetchByte
     joinedText = new TextDecoder().decode(await mcpZip.readEntry(chain.mcpConfig.entry || 'config/joined.tsrg'));
   }
 
+  checkCancel(cancel);
   onStatus?.('读取补丁');
   const patchBytes = await zip.readEntry(chain.patchEntry || 'data/client.lzma');
 
@@ -507,5 +572,6 @@ export async function runPlannedChain(plan, { engine, onStatus = null, fetchByte
     patchBytes,
     spec: chain.spec,
     onStatus,
+    cancel,
   });
 }

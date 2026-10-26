@@ -160,7 +160,7 @@ a:hover { text-decoration: underline; }
 @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
 
 .list-card { padding: 12px; }
-.list-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+.list-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .input {
   width: 100%; border: 1px solid var(--outline-variant); border-radius: var(--radius-sm);
   background: var(--surface-container-low); color: var(--on-surface);
@@ -218,7 +218,7 @@ select.input { cursor: pointer; }
 .list-toolbar .btn { white-space: nowrap; flex: none; }
 body.running .list { opacity: .55; pointer-events: none; }
 body.running .list-toolbar .input { opacity: .55; }
-.list-toolbar .input.compact { min-width: 96px; }
+.list-toolbar .input.compact { min-width: 118px; }
 
 .drop-zone {
   border: 1.5px dashed var(--outline); border-radius: var(--radius); padding: 26px;
@@ -350,3 +350,28 @@ body.running .list-toolbar .input { opacity: .55; }
   .topbar-actions .icon-btn { width: 32px; height: 32px; }
 }
 
+/* 下载源高级设置 */
+.adv-wrap { position: relative; display: inline-block; }
+.adv-sources { position: absolute; right: 0; top: calc(100% + 6px); width: 360px; max-height: 60vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--outline, #d8d8d8); border-radius: 8px; background: var(--surface, #fff); box-shadow: 0 10px 28px rgba(0, 0, 0, .16); z-index: 40; }
+.adv-foot { display: flex; gap: 8px; margin-top: 8px; }
+.adv-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 6px 14px; margin: 8px 0; }
+.adv-item { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 24px; }
+.adv-item input { width: 16px; height: 16px; }
+.adv-sources .field-row { justify-content: flex-start; gap: 8px; margin: 6px 0 0; }
+
+/* 设置页"镜像站点"行: 下拉选择让出空间给高级按钮, 避免按钮溢出卡片 */
+#view-settings .adv-row { gap: 8px; align-items: center; }
+#view-settings .adv-row select { flex: 1 1 0; min-width: 0; }
+#view-settings .adv-row .adv-wrap { flex: 0 0 auto; }
+#view-settings .adv-row .adv-panel { right: 0; }
+
+/* 分组内细选 */
+.adv-group { border-radius: 6px; }
+.adv-head { gap: 8px; }
+.adv-head .adv-label { flex: 1 1 auto; }
+.adv-caret { border: 0; background: transparent; cursor: pointer; color: var(--on-surface-variant, #666); font-size: 12px; padding: 0 4px; line-height: 20px; }
+.adv-caret:hover { color: var(--primary, #4b56c0); }
+.adv-hosts { margin: 2px 0 6px 26px; display: flex; flex-direction: column; gap: 2px; }
+.adv-host { font-size: 12px; line-height: 22px; color: var(--on-surface-variant, #555); }
+.adv-host input { width: 14px; height: 14px; }
+.adv-panel { max-height: 62vh; }

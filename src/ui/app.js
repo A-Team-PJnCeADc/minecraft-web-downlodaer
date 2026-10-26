@@ -1,18 +1,21 @@
 // 界面控制器: 版本/加载器/整合包解析, 计划生成, 导出执行与进度渲染
 // UI 优化: 版本列表虚拟滚动, 进度渲染节流(120ms)并复用 DOM, 速度曲线用 Canvas, 日志批量插入
 import { HashEngine } from '../core/hash.js';
-import { Sources, SOURCE_MODES, MIRROR_SITES, DEFAULT_MIRROR_SITE, DEFAULT_GATEWAY, DEFAULT_GH_PROXY, probeCorsDisabled, loadVersionManifest, loadFabricLoaderVersions, loadForgeVersions, loadNeoForgeVersions } from '../core/hmcl/providers.js';
+import { Sources, SOURCE_MODES, SOURCE_GROUPS, MIRROR_SITES, DEFAULT_MIRROR_SITE, DEFAULT_GATEWAY, DEFAULT_GH_PROXY, probeCorsDisabled, loadVersionManifest, loadFabricLoaderVersions, loadForgeVersions, loadNeoForgeVersions } from '../core/hmcl/providers.js';
 import { buildVersionPlan, buildModpackPlan, instanceIdFor } from '../core/hmcl/plan.js';
 import { officialUrlsFor } from '../core/hmcl/official.js';
 import { detectModpack, modrinthPlan, cursePlan, mcbbsPlan, multimcPlan } from '../core/hmcl/modpack.js';
 import { ZipWriter } from '../core/zip/writer.js';
 import { openZipFromBlob } from '../core/zip/reader.js';
 import { DownloadEngine } from '../core/dl/engine.js';
+import { PatchEngine } from '../core/jar/wasm.js';
+import { fetchBytesWithProgress } from '../core/dl/fetchbytes.js';
 import { FetchPool } from '../core/dl/pool.js';
 import { HashPool } from '../core/dl/hashpool.js';
 import { openOpfsSink, openFileSink } from '../core/zip/sink.js';
 import { detectTarget } from '../core/hmcl/version.js';
 import { runPlannedChain } from '../core/hmcl/forgechain.js';
+import { CancelBus, isAbort } from '../core/dl/cancel.js';
 
 const $ = (id) => document.getElementById(id);
 const fmtBytes = (n) => {
@@ -46,6 +49,8 @@ const DEFAULT_SETTINGS = {
   h2HostConcurrency: 32,
   sourceMode: 'default',
   mirrorSite: DEFAULT_MIRROR_SITE,
+  enabledGroups: null,
+  disabledHosts: null,
   mirrorRoot: '',
   gateway: DEFAULT_GATEWAY,
   ghProxy: DEFAULT_GH_PROXY,
@@ -369,6 +374,7 @@ function bindSettings() {
   };
   $('setMirrorSite').addEventListener('change', () => applyMirrorSite($('setMirrorSite').value));
   $('mirrorSite').addEventListener('change', () => applyMirrorSite($('mirrorSite').value));
+  bindAdvSources();
   $('setMirrorRoot').addEventListener('change', () => {
     state.settings.mirrorRoot = $('setMirrorRoot').value.trim();
     saveSettings();
@@ -427,6 +433,8 @@ function rebuildSources() {
     gateway: state.settings.gateway,
     curseApiKey: activeCurseKey(),
     libraryProxy: state.settings.sourceMode === 'custom' ? state.settings.proxy : undefined,
+    enabledGroups: state.settings.enabledGroups,
+    disabledHosts: state.settings.disabledHosts,
   });
   if (state.settings.sourceMode === 'custom') state.sources.libraryProxy = state.settings.proxy;
   else state.settings.proxy = state.sources.libraryProxy;
@@ -441,6 +449,118 @@ async function refreshStorageInfo() {
 }
 
 // 能力检测
+// 高级: 下载源分组自由组合(下载页与设置页共用同一套面板)
+function advEnabled() {
+  return new Set(state.settings.enabledGroups || SOURCE_GROUPS.map((g) => g.id));
+}
+
+function renderAdvSources() {
+  const enabled = advEnabled();
+  const disabledHosts = new Set(state.settings.disabledHosts || []);
+  for (const panel of document.querySelectorAll('.adv-panel')) {
+    const box = panel.querySelector('.adv-list');
+    if (!box) continue;
+    const openGroups = new Set([...box.querySelectorAll('.adv-group[data-open="1"]')].map((el) => el.dataset.group));
+    box.innerHTML = SOURCE_GROUPS.map((g) => {
+      const groupOn = enabled.has(g.id);
+      const hosts = g.hosts.map((x) => `
+        <label class="adv-item adv-host">
+          <input type="checkbox" data-group="${g.id}" data-host="${x.h}" ${groupOn && !disabledHosts.has(x.h) ? 'checked' : ''} ${groupOn ? '' : 'disabled'} />
+          <span>${x.n}</span>
+        </label>`).join('');
+      return `
+        <div class="adv-group" data-group="${g.id}" data-open="${openGroups.has(g.id) ? '1' : '0'}">
+          <div class="adv-item adv-head">
+            <input type="checkbox" data-group="${g.id}" ${groupOn ? 'checked' : ''} />
+            <span class="adv-label">${g.label}</span>
+            <button class="adv-caret" title="展开细选">${openGroups.has(g.id) ? '▾' : '▸'}</button>
+          </div>
+          <div class="adv-hosts" ${openGroups.has(g.id) ? '' : 'hidden'}>${hosts}</div>
+        </div>`;
+    }).join('');
+  }
+  updateAdvBadge();
+}
+
+function updateAdvBadge() {
+  const total = SOURCE_GROUPS.length;
+  const enabled = advEnabled();
+  for (const btn of document.querySelectorAll('.adv-toggle')) {
+    btn.textContent = enabled.size === total ? '高级 ▾' : `高级 ${enabled.size}/${total} ▾`;
+    btn.title = `高级：自由组合下载源（启用 ${SOURCE_GROUPS.filter((g) => enabled.has(g.id)).map((g) => g.label).join('、') || '无'}）`;
+  }
+}
+
+function setAdvGroups(list) {
+  state.settings.enabledGroups = list.length === SOURCE_GROUPS.length ? null : list;
+  saveSettings();
+  rebuildSources();
+  renderAdvSources();
+  log(`下载源分组: ${list.length ? list.join(', ') : '(空)'}`);
+}
+
+function bindAdvSources() {
+  for (const btn of document.querySelectorAll('.adv-toggle')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = btn.parentElement?.querySelector('.adv-panel');
+      if (!panel) return;
+      const willOpen = panel.hidden;
+      for (const other of document.querySelectorAll('.adv-panel')) other.hidden = true;
+      panel.hidden = !willOpen;
+      if (willOpen) renderAdvSources();
+    });
+  }
+  document.addEventListener('click', (e) => {
+    const caret = e.target.closest?.('.adv-caret');
+    if (caret) {
+      e.preventDefault();
+      e.stopPropagation();
+      const group = caret.closest('.adv-group');
+      const open = group.dataset.open !== '1';
+      group.dataset.open = open ? '1' : '0';
+      const hosts = group.querySelector('.adv-hosts');
+      if (hosts) hosts.hidden = !open;
+      caret.textContent = open ? '▾' : '▸';
+      return;
+    }
+    if (e.target.closest && e.target.closest('.adv-wrap')) return;
+    for (const panel of document.querySelectorAll('.adv-panel')) panel.hidden = true;
+  });
+  document.addEventListener('change', (e) => {
+    const input = e.target;
+    if (!input?.matches || !input.matches('.adv-panel input[type=checkbox]')) return;
+    const groupId = input.dataset.group;
+    const host = input.dataset.host;
+    if (host) {
+      // 主机级: 勾上就从禁用表移除, 取消就加入
+      const off = new Set(state.settings.disabledHosts || []);
+      if (input.checked) off.delete(host);
+      else off.add(host);
+      state.settings.disabledHosts = off.size ? [...off] : null;
+      saveSettings();
+      rebuildSources();
+      updateAdvBadge();
+      log(`源主机 ${host}: ${input.checked ? '启用' : '停用'}`);
+      return;
+    }
+    // 组级
+    const panel = input.closest('.adv-panel');
+    const next = [...panel.querySelectorAll('input[data-group]:not([data-host])')].filter((x) => x.checked).map((x) => x.dataset.group);
+    setAdvGroups(next);
+  });
+  for (const btn of document.querySelectorAll('.adv-all')) btn.addEventListener('click', () => setAdvGroups(SOURCE_GROUPS.map((g) => g.id)));
+  for (const btn of document.querySelectorAll('.adv-none')) btn.addEventListener('click', () => setAdvGroups([]));
+  for (const btn of document.querySelectorAll('.adv-default')) btn.addEventListener('click', () => {
+    state.settings.disabledHosts = null;
+    setAdvGroups(SOURCE_GROUPS.map((g) => g.id));
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') for (const panel of document.querySelectorAll('.adv-panel')) panel.hidden = true;
+  });
+  renderAdvSources();
+}
+
 function mirrorSiteText() {
   const site = MIRROR_SITES[state.settings.mirrorSite] || MIRROR_SITES[DEFAULT_MIRROR_SITE];
   if (site.id === 'custom') {
@@ -891,7 +1011,13 @@ async function chooseSink(zipName) {
       state.sinkInfo = { kind: 'file', handle, name: handle.name };
       return sink;
     } catch (err) {
-      log('未选择保存位置，改用 OPFS 暂存: ' + err.message);
+      // 用户在选择框里点了取消: 中止导出, 不静默改成 OPFS
+      if (err?.name === 'AbortError') {
+        const abort = new Error('已取消');
+        abort.name = 'AbortError';
+        throw abort;
+      }
+      log('无法写入所选位置，改用 OPFS 暂存: ' + err.message);
     }
   }
   const opfs = await openOpfsSink('mcweb-export.zip');
@@ -918,36 +1044,50 @@ async function startExport() {
   startTicker();
 
   const zipName = `${plan.instanceId}.zip`;
-  const controller = new AbortController();
+  // 取消总线: 一次 cancel 同时发消息给订阅者, 并桥接 AbortSignal 给 fetch 与下载引擎
+  const cancelBus = new CancelBus(zipName);
+  state.cancelBus = cancelBus;
+  const unsubscribeCancel = cancelBus.subscribe((type, reason) => {
+    if (type === 'cancel') log('收到取消消息: ' + reason);
+  });
+  const controller = { signal: cancelBus.toSignal(), abort: (r) => cancelBus.cancel(r || '用户取消') };
   state.controller = controller;
 
   try {
+    // 原版下载与链内取回共用: 流式 + 进度 + 停滞换源 + 取消
+    const chainFetch = (urls, meta, label = '文件') => fetchBytesWithProgress(urls, {
+      meta,
+      label,
+      cancel: cancelBus,
+      log: (msg) => log(msg),
+      onProgress: (got, total) => renderChainProgress(`取回${label}`, got, total),
+    });
+
     const sink = await chooseSink(zipName);
     state.zipWriter = new ZipWriter(sink, { hashEngine: state.hashEngine });
 
     if (plan.forgeChain) {
-      log('执行加载器补丁链: 取回输入 -> 映射合并 -> 类重写 -> binpatch');
+      const steps = (plan.forgeChain.steps || []).map((x) => x.name).join(' -> ');
+      log(`加载器安装: ${steps}（先下载原版，再装加载器；jar 产物替换该路径的任务，不会重复下载）`);
       const t0 = performance.now();
+
+      // 第一步: 下载原版客户端 jar
+      renderChainProgress('下载原版');
+      log('下载原版客户端 jar');
+      const clientBytes = await chainFetch(plan.forgeChain.client.urls, plan.forgeChain.client, '原版客户端 jar');
+
+      // 第二步: 用原版字节安装加载器
+      renderChainProgress('安装加载器');
+      log('开始安装加载器');
+      if (!state.patchEngine) {
+        state.patchEngine = await PatchEngine.load(new URL('../wasm/javapatch.wasm', import.meta.url).href);
+      }
       const chainOut = await runPlannedChain(plan, {
-        engine: state.hashEngine,
-        onStatus: (msg) => log(msg),
-        fetchBytes: async (urls, meta) => {
-          let lastErr = null;
-          for (const url of urls) {
-            try {
-              const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
-              if (!res.ok) throw new Error('HTTP ' + res.status);
-              const bytes = new Uint8Array(await res.arrayBuffer());
-              if (meta?.size && bytes.length !== meta.size) {
-                throw new Error(`大小不符 ${bytes.length} != ${meta.size}`);
-              }
-              return bytes;
-            } catch (err) {
-              lastErr = err;
-            }
-          }
-          throw new Error(`${urls[0]}: ${lastErr?.message || '取回失败'}`);
-        },
+        engine: state.patchEngine,
+        cancel: cancelBus,
+        clientBytes,
+        onStatus: (msg) => { log(msg); renderChainProgress(msg); },
+        fetchBytes: chainFetch,
       });
       const jarPath = plan.forgeChain.output;
       const at = plan.tasks.findIndex((t) => t.path === jarPath);
@@ -956,7 +1096,7 @@ async function startExport() {
       if (at >= 0) plan.tasks[at] = local;
       else plan.tasks.push(local);
       plan.stats = { ...plan.stats, totalBytes: plan.stats.totalBytes - oldSize + chainOut.jar.length };
-      log(`补丁链完成 ${((performance.now() - t0) / 1000).toFixed(1)}s, jar ${chainOut.jar.length} 字节`);
+      log(`加载器安装完成 ${((performance.now() - t0) / 1000).toFixed(1)}s, jar ${chainOut.jar.length} 字节`);
     }
     const poolSize = Math.max(2, Math.min(state.settings.concurrency, 24));
     state.pool = new FetchPool({ size: poolSize });
@@ -991,12 +1131,17 @@ async function startExport() {
     await state.engine.run();
     await afterEngineRun();
   } catch (err) {
-    log('导出失败: ' + (err.message || String(err)), true);
+    if (isAbort(err) || cancelBus.cancelled) {
+      log('已取消导出，未写入的条目保持未完成状态');
+    } else {
+      log('导出失败: ' + (err.message || String(err)), true);
+    }
   } finally {
     state.running = false;
     applyRunningLock(false);
     stopTicker();
     state.controller = null;
+    unsubscribeCancel();
     $('btnCancel').disabled = true;
     $('btnStart').disabled = !state.plan;
     if (state.stats) renderProgress(state.stats, true);
@@ -1046,6 +1191,8 @@ async function finalizeAndSave() {
     }
     const summary = engine.summary();
     state.plan.result = summary;
+    // finalize 里重算过分类计数, 再刷一次进度卡
+    renderProgress(engine.stats, true);
     if (!summary.failures.length) {
       $('failCard').hidden = true;
       $('failList').innerHTML = '';
@@ -1104,8 +1251,13 @@ async function retryFailed() {
   $('btnRetryGateway').disabled = true;
   $('btnSavePartial').disabled = true;
   $('btnCancel').disabled = false;
-  // 取消或上一轮结束后重试: 换一个新的 AbortController, 否则引擎会立刻被判为已取消
-  const controller = new AbortController();
+  // 取消或上一轮结束后重试: 换一条新的取消总线, 否则引擎会立刻被判为已取消
+  const cancelBus = new CancelBus('重试');
+  state.cancelBus = cancelBus;
+  const unsubscribeCancel = cancelBus.subscribe((type, reason) => {
+    if (type === 'cancel') log('收到取消消息: ' + reason);
+  });
+  const controller = { signal: cancelBus.toSignal(), abort: (r) => cancelBus.cancel(r || '用户取消') };
   state.controller = controller;
   state.engine.signal = controller.signal;
   startTicker();
@@ -1118,6 +1270,7 @@ async function retryFailed() {
     state.running = false;
     applyRunningLock(false);
     stopTicker();
+    unsubscribeCancel();
     $('btnCancel').disabled = true;
   }
   await afterEngineRun();
@@ -1226,6 +1379,21 @@ function drawSpeedChart() {
   ctx.fill();
 }
 
+// 补丁链阶段: 没有引擎统计, 单独驱动百分比/阶段文字
+function renderChainProgress(label, done = 0, total = 0) {
+  const pct = total ? Math.min(100, (done / total) * 100) : 0;
+  setText('pgPercent', total ? pct.toFixed(1) + '%' : '--');
+  setText('pgBytes', total ? `${fmtBytes(done)} / ${fmtBytes(total)}` : '--');
+  setText('pgSpeed', '--');
+  setText('pgEta', '准备中');
+  setText('pgPhase', label);
+  const bar = $('pgBar');
+  if (bar) {
+    bar.style.width = (total ? pct : 0).toFixed(2) + '%';
+    bar.classList.remove('done');
+  }
+}
+
 function renderProgress(stats, finished = false) {
   const now = performance.now();
   if (!finished && now - state.ui.lastRender < 120) return;
@@ -1237,13 +1405,20 @@ function renderProgress(stats, finished = false) {
     ? ((hist[hist.length - 1].b - hist[0].b) / ((now - hist[0].t) / 1000))
     : 0;
 
-  const pct = stats.bytesTotal ? Math.min(100, (stats.bytesDone / stats.bytesTotal) * 100) : 0;
+  // 总字节数未知时按文件数给进度, 免得整条进度一直 0%
+  const byBytes = stats.bytesTotal > 0;
+  const pct = byBytes
+    ? Math.min(100, (stats.bytesDone / stats.bytesTotal) * 100)
+    : (stats.filesTotal ? Math.min(100, (stats.filesDone / stats.filesTotal) * 100) : 0);
   setText('pgPercent', pct.toFixed(1) + '%');
-  setText('pgBytes', `${fmtBytes(stats.bytesDone)} / ${fmtBytes(stats.bytesTotal)}`);
+  setText('pgBytes', byBytes
+    ? `${fmtBytes(stats.bytesDone)} / ${fmtBytes(stats.bytesTotal)}`
+    : `${stats.filesDone || 0} / ${stats.filesTotal || 0} 文件`);
   // 速度取 2 秒滑窗, 避免分片成批到达时读数在 0 与峰值之间跳
   setText('pgSpeed', `${Math.max(0, speed / 1048576).toFixed(2)} MiB/s`);
   const remain = speed > 0 ? (stats.bytesTotal - stats.bytesDone) / speed : Infinity;
   setText('pgEta', finished ? '已完成' : `剩余 ${fmtTime(remain)}`);
+  setText('pgPhase', '下载');
   const bar = $('pgBar');
   bar.style.width = pct.toFixed(2) + '%';
   bar.classList.toggle('done', finished && stats.failures.length === 0);
@@ -1369,7 +1544,8 @@ function bindUI() {
   });
   $('btnCancel').addEventListener('click', () => {
     log('已请求取消');
-    state.controller?.abort();
+    if (state.cancelBus) state.cancelBus.cancel('用户取消');
+    else state.controller?.abort();
   });
   $('pickModpack').addEventListener('click', (e) => { e.preventDefault(); $('modpackFile').click(); });
   $('modpackFile').addEventListener('change', (e) => loadModpackFile(e.target.files?.[0]));

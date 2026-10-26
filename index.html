@@ -111,9 +111,9 @@
                   <option value="custom">自定义</option>
                 </select>
                 <select id="mirrorSite" class="input compact" title="镜像站点（镜像源/自动 时生效）">
-                  <option value="bmclapi">镜像站：BMCLAPI</option>
-                  <option value="campus">镜像站：高校镜像</option>
-                  <option value="custom">镜像站：自定义</option>
+                  <option value="bmclapi">BMCLAPI</option>
+                  <option value="campus">高校镜像</option>
+                  <option value="custom">自定义</option>
                 </select>
               </div>
               <div class="list" id="versionList"></div>
@@ -215,6 +215,7 @@
               <span id="pgBytes">0 / 0</span>
               <span id="pgSpeed">0 MiB/s</span>
               <span id="pgEta">--</span>
+              <span id="pgPhase">--</span>
             </div>
           </div>
           <div class="bar big"><div class="bar-fill" id="pgBar"></div></div>
@@ -265,11 +266,25 @@
               <option value="mirror">镜像源（MIRROR，镜像优先）</option>
               <option value="custom">自定义（自填库代理与网关）</option>
             </select></div>
-            <div class="field-row"><label>镜像站点</label><select id="setMirrorSite" class="input">
-              <option value="bmclapi">BMCLAPI（全结构）</option>
-              <option value="campus">高校镜像（maven 子树）</option>
-              <option value="custom">自定义镜像根</option>
-            </select></div>
+            <div class="field-row adv-row"><label>镜像站点</label>
+              <select id="setMirrorSite" class="input">
+                <option value="bmclapi">BMCLAPI（全结构）</option>
+                <option value="campus">高校镜像（maven 子树）</option>
+                <option value="custom">自定义镜像根</option>
+              </select>
+              <div class="adv-wrap">
+                <button class="btn ghost compact adv-toggle" title="高级：自由组合下载源">高级 ▾</button>
+                <div class="adv-sources adv-panel" hidden>
+                  <div class="hint">勾选参与候选的源分组；关掉的组不会出现在任何候选链里。</div>
+                  <div class="adv-list"></div>
+                  <div class="adv-foot">
+                    <button class="btn ghost compact adv-all">全选</button>
+                    <button class="btn ghost compact adv-none">全不选</button>
+                    <button class="btn ghost compact adv-default">恢复默认</button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="field-row"><label>自定义镜像根</label><input id="setMirrorRoot" class="input" placeholder="https://your-mirror.example/bmclapi（选“自定义镜像根”时生效）" /></div>
             <div class="field-row"><label>库代理</label><input id="setProxy" class="input" /></div>
             <div class="field-row"><label>CORS 网关</label><div style="display:flex;gap:8px;flex:1"><input id="setGateway" class="input" placeholder="https://mc-gateway.noon.pw/api/gw?url={url}" /><button class="btn ghost" id="btnTestGateway" type="button">测试</button></div></div>

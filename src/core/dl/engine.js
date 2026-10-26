@@ -153,6 +153,18 @@ export class DownloadEngine {
 
   async finalize() {
     const kept = await this.writer.finalize();
+    // 以任务状态重算分类计数: 增量计数在重试/无字节完成时可能与实际不符
+    const per = {};
+    for (const t of this.tasks) {
+      const name = t.category || 'other';
+      const c = per[name] || (per[name] = { count: 0, bytes: 0, done: 0, bytesDone: 0, failed: 0 });
+      c.count++;
+      c.bytes += t.size || 0;
+      c.bytesDone += t.bytesDone || 0;
+      if (t.done) c.done++;
+      if (t.failed) c.failed++;
+    }
+    this.stats.perCategory = per;
     this.stats.elapsed = performance.now() - this.stats.startedAt;
     this.stats.zipBytes = this.writer.totalSize;
     this.stats.entryCount = kept.length;
@@ -453,7 +465,12 @@ export class DownloadEngine {
     task.done = true;
     this.stats.filesDone++;
     this.category(task).done++;
-    if (bytes) this.bump(task, bytes);
+    if (bytes) {
+      this.bump(task, bytes);
+    } else {
+      // 没有字节增量的完成(校验后封包)也要推一次进度, 否则界面上的完成数会停在旧值
+      this.onProgress?.(this.stats);
+    }
   }
 
   bump(task, bytes) {

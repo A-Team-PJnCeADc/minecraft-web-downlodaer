@@ -102,7 +102,14 @@ export async function resolveForgePatch(sources, gameVersion, loader, onStatus) 
   const cached = readLoaderCache(cacheKey);
   if (cached) {
     onStatus?.(`加载器描述来自本地缓存（${loader.type} ${loader.version}）`);
-    return { ...cached, zip: null, fromCache: true };
+    // 缓存的只有描述; 补丁链需要安装器字节时按需远程读
+    const url = cached.installerUrl;
+    return {
+      ...cached,
+      zip: null,
+      fromCache: true,
+      openZip: url ? () => openZipFromUrl(url) : null,
+    };
   }
 
   const candidates = [];
@@ -428,12 +435,18 @@ export async function buildVersionPlan(options) {
                 }
                 : null,
               mcpConfig: null,
-              steps: [
-                { name: '取回输入', status: 'local' },
-                { name: '映射合并', status: 'local' },
-                { name: '类重写', status: 'local', flags: spec.flags },
-                { name: 'binpatch', status: 'local' },
-              ],
+              steps: spec.mappings === 'none'
+                ? [
+                  { name: '取回输入', status: 'local' },
+                  { name: '解包 bundler', status: 'local' },
+                  { name: 'binpatch', status: 'local' },
+                ]
+                : [
+                  { name: '取回输入', status: 'local' },
+                  { name: '映射合并', status: 'local' },
+                  { name: '类重写', status: 'local', flags: spec.flags },
+                  { name: 'binpatch', status: 'local' },
+                ],
               output: null,
             };
           } else {
@@ -482,8 +495,8 @@ export async function buildVersionPlan(options) {
     const mode = forgeChain.spec.mappings || 'merged';
     const missing = [];
     if (!forgeChain.client) missing.push('客户端 jar');
-    if (mode !== 'joined' && !forgeChain.mojmap) missing.push('官方映射');
-    if (mode !== 'mojmap' && !forgeChain.mcpConfig) missing.push('MCP 配置');
+    if (mode !== 'joined' && mode !== 'none' && !forgeChain.mojmap) missing.push('官方映射');
+    if (mode !== 'mojmap' && mode !== 'none' && !forgeChain.mcpConfig) missing.push('MCP 配置');
     if (missing.length) {
       unsupported.push({
         item: '补丁链输入',
