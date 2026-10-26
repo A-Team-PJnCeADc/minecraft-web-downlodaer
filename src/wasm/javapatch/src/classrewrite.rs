@@ -14,6 +14,10 @@ pub const FLAG_FRESH_POOL: u32 = 8;
 // SourceFile 的属性名与值都在写出阶段入池(1.21.x 的 ART 链需要)
 pub const FLAG_SRC_AT_WRITE: u32 = 16;
 pub const FLAG_INHERIT_METHODS: u32 = 32;
+// 引导方法先登记参数再登记句柄(ASM 8+ 的行为; ASM 6 是先句柄后参数)
+pub const FLAG_BSM_ARGS_FIRST: u32 = 64;
+// 构造函数参数注解前移(ART 的 ParameterAnnotationFixer); SpecialSource 路径不做
+pub const FLAG_PARAM_ANN_FIX: u32 = 128;
 
 const ACC_DEPRECATED: u32 = 0x20000;
 
@@ -123,6 +127,7 @@ impl Maps {
         self.classes.get(name).cloned().unwrap_or_else(|| name.to_string())
     }
 
+
     fn field(&self, owner: &str, name: &str, desc: &str) -> String {
         self.resolve_field(owner, name, desc, 0)
             .unwrap_or_else(|| name.to_string())
@@ -229,16 +234,80 @@ impl Maps {
         let b = sig.as_bytes();
         let mut out = String::with_capacity(sig.len() + 16);
         let mut i = 0usize;
-        while i < b.len() {
-            match b[i] {
-                b'L' => self.sig_class(b, &mut i, &mut out),
-                _ => {
-                    out.push(b[i] as char);
-                    i += 1;
+        self.sig_scan(b, &mut i, &mut out);
+        out
+    }
+
+    // 顶层: 类型形参区与普通类型混合出现
+    fn sig_scan(&self, b: &[u8], i: &mut usize, out: &mut String) {
+        while *i < b.len() {
+            match b[*i] {
+                b'<' => {
+                    *i += 1;
+                    out.push('<');
+                    self.sig_params(b, i, out);
+                }
+                b'L' => self.sig_class(b, i, out),
+                c => {
+                    out.push(c as char);
+                    *i += 1;
                 }
             }
         }
-        out
+    }
+
+    // 类型形参: 名字到 ':', 之后类上界与若干接口上界
+    fn sig_params(&self, b: &[u8], i: &mut usize, out: &mut String) {
+        while *i < b.len() && b[*i] != b'>' {
+            let st = *i;
+            while *i < b.len() && b[*i] != b':' && b[*i] != b'>' {
+                *i += 1;
+            }
+            out.push_str(&String::from_utf8_lossy(&b[st..*i]));
+            if *i < b.len() && b[*i] == b':' {
+                out.push(':');
+                *i += 1;
+            }
+            if *i < b.len() && b[*i] != b':' && b[*i] != b'>' {
+                self.sig_one(b, i, out);
+            }
+            while *i < b.len() && b[*i] == b':' {
+                out.push(':');
+                *i += 1;
+                self.sig_one(b, i, out);
+            }
+        }
+        if *i < b.len() {
+            out.push('>');
+            *i += 1;
+        }
+    }
+
+    fn sig_one(&self, b: &[u8], i: &mut usize, out: &mut String) {
+        match b.get(*i) {
+            Some(b'L') => self.sig_class(b, i, out),
+            Some(b'[') => {
+                out.push('[');
+                *i += 1;
+                self.sig_one(b, i, out);
+            }
+            Some(b'T') => {
+                let st = *i;
+                *i += 1;
+                while *i < b.len() && b[*i] != b';' {
+                    *i += 1;
+                }
+                if *i < b.len() {
+                    *i += 1;
+                }
+                out.push_str(&String::from_utf8_lossy(&b[st..*i]));
+            }
+            Some(&c) => {
+                out.push(c as char);
+                *i += 1;
+            }
+            None => {}
+        }
     }
 
     // 解析一个类类型签名: Lpkg/Outer<...>.Inner<...>;
@@ -280,9 +349,14 @@ impl Maps {
                     q += 1;
                 }
                 let inner = String::from_utf8_lossy(&b[s2..q]).into_owned();
-                orig.push('$');
-                orig.push_str(&inner);
-                let m = self.class(&orig);
+                // 段里已经带 '$' 时是完整二进制名, 直接查表; 否则按 外层$段 拼
+                let m = if inner.contains('$') {
+                    self.class(&inner)
+                } else {
+                    orig.push('$');
+                    orig.push_str(&inner);
+                    self.class(&orig)
+                };
                 let simple = match m.rfind('$') {
                     Some(k) => m[k + 1..].to_string(),
                     None => inner.clone(),
@@ -372,7 +446,7 @@ impl<'a> Cp<'a> {
             let (a, b, adv) = match tag {
                 1 => {
                     let len = u16::from_be_bytes([class[p + 1], class[p + 2]]) as usize;
-                    let s = String::from_utf8_lossy(&class[p + 3..p + 3 + len]).into_owned();
+                    let s = decode_mutf8(&class[p + 3..p + 3 + len]);
                     strings[i as usize] = Some(s);
                     (0, 0, 3 + len)
                 }
@@ -505,9 +579,10 @@ impl<'a> Cp<'a> {
         if let Some(&i) = self.keys.get(&key) {
             return i;
         }
-        let mut body = Vec::with_capacity(s.len() + 2);
-        body.extend_from_slice(&(s.len() as u16).to_be_bytes());
-        body.extend_from_slice(s.as_bytes());
+        let bytes = encode_mutf8(s);
+        let mut body = Vec::with_capacity(bytes.len() + 2);
+        body.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+        body.extend_from_slice(&bytes);
         self.push(1, &body, Some(key))
     }
 
@@ -666,6 +741,9 @@ struct MethodOut {
     param_ri: Option<ParamAnns>,
     default_value: Option<Vec<u8>>,
     method_params: Option<Vec<u8>>,
+    // 属性被丢弃但属性名仍要留在常量池(ART 0.1.25)
+    orphan_param_rv: bool,
+    orphan_param_ri: bool,
 }
 
 struct CodeOut {
@@ -761,15 +839,38 @@ fn read_anns(cp: &mut Cp, maps: &Maps, class: &[u8], off: usize) -> Result<Vec<V
 }
 
 fn read_type_anns(cp: &mut Cp, maps: &Maps, class: &[u8], off: usize) -> Result<Vec<Vec<u8>>, String> {
+    read_type_anns_map(cp, maps, class, off, None)
+}
+
+fn read_type_anns_map(
+    cp: &mut Cp,
+    maps: &Maps,
+    class: &[u8],
+    off: usize,
+    map: Option<&[(usize, usize)]>,
+) -> Result<Vec<Vec<u8>>, String> {
     let n = u2_at(class, off) as usize;
     let mut p = off + 2;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut bytes = Vec::new();
-        p = read_type_annotation(cp, maps, class, p, &mut bytes)?;
+        p = read_type_annotation(cp, maps, class, p, &mut bytes, map)?;
         out.push(bytes);
     }
     Ok(out)
+}
+
+fn map_pc(map: &[(usize, usize)], old: usize) -> usize {
+    match map.binary_search_by_key(&old, |e| e.0) {
+        Ok(k) => map[k].1,
+        Err(k) => {
+            if k == 0 {
+                0
+            } else {
+                map[k - 1].1 + (old - map[k - 1].0)
+            }
+        }
+    }
 }
 
 fn read_annotation(
@@ -849,13 +950,34 @@ fn read_type_annotation(
     class: &[u8],
     mut p: usize,
     out: &mut Vec<u8>,
+    map: Option<&[(usize, usize)]>,
 ) -> Result<usize, String> {
     let tt = class[p];
     out.push(tt);
     p += 1;
-    let info = target_info_len(tt, class, p);
-    out.extend_from_slice(&class[p..p + info]);
-    p += info;
+    if (tt == 0x40 || tt == 0x41) && map.is_some() {
+        // 局部变量目标的 (start_pc, length) 跟随代码布局
+        let m = map.unwrap();
+        let n = u2_at(class, p) as usize;
+        out.extend_from_slice(&(n as u16).to_be_bytes());
+        let mut q = p + 2;
+        for _ in 0..n {
+            let st = u2_at(class, q) as usize;
+            let len = u2_at(class, q + 2) as usize;
+            let idx = u2_at(class, q + 4);
+            let ns = map_pc(m, st);
+            let ne = map_pc(m, st + len);
+            out.extend_from_slice(&(ns as u16).to_be_bytes());
+            out.extend_from_slice(&((ne - ns) as u16).to_be_bytes());
+            out.extend_from_slice(&idx.to_be_bytes());
+            q += 6;
+        }
+        p += 2 + 6 * n;
+    } else {
+        let info = target_info_len(tt, class, p);
+        out.extend_from_slice(&class[p..p + info]);
+        p += info;
+    }
     let path_len = class[p] as usize;
     out.push(class[p]);
     p += 1;
@@ -993,7 +1115,6 @@ fn read_record(
 }
 
 
-pub 
 // ParameterAnnotationFixer: 构造函数的参数注解整体前移合成参数个数
 fn synthetic_param_prefix(cp: &Cp, class: &[u8], this_idx: u16, this_name: &str, access: u16) -> Vec<String> {
     if access & 0x4000 != 0 {
@@ -1115,6 +1236,72 @@ fn desc_starts_with(desc: &str, prefix: &[String]) -> bool {
     true
 }
 
+pub 
+// class 文件用 modified UTF-8: NUL 编成 C0 80, 增补字符拆成两个三字节代理项
+fn decode_mutf8(b: &[u8]) -> String {
+    let mut out = String::with_capacity(b.len());
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c as char);
+            i += 1;
+        } else if c & 0xE0 == 0xC0 && i + 1 < b.len() {
+            let v = ((c as u32 & 0x1F) << 6) | (b[i + 1] as u32 & 0x3F);
+            out.push(char::from_u32(v).unwrap_or('\u{FFFD}'));
+            i += 2;
+        } else if c & 0xF0 == 0xE0 && i + 2 < b.len() {
+            let v = ((c as u32 & 0x0F) << 12)
+                | ((b[i + 1] as u32 & 0x3F) << 6)
+                | (b[i + 2] as u32 & 0x3F);
+            if (0xD800..0xDC00).contains(&v) && i + 5 < b.len() && b[i + 3] & 0xF0 == 0xE0 {
+                let lo = ((b[i + 3] as u32 & 0x0F) << 12)
+                    | ((b[i + 4] as u32 & 0x3F) << 6)
+                    | (b[i + 5] as u32 & 0x3F);
+                if (0xDC00..0xE000).contains(&lo) {
+                    let cp = 0x10000 + ((v - 0xD800) << 10) + (lo - 0xDC00);
+                    out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
+                    i += 6;
+                    continue;
+                }
+            }
+            out.push(char::from_u32(v).unwrap_or('\u{FFFD}'));
+            i += 3;
+        } else {
+            out.push('\u{FFFD}');
+            i += 1;
+        }
+    }
+    out
+}
+
+fn encode_mutf8(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        let cp = ch as u32;
+        if (1..0x80).contains(&cp) {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x10000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            let v = cp - 0x10000;
+            let hi = 0xD800 + (v >> 10);
+            let lo = 0xDC00 + (v & 0x3FF);
+            for c in [hi, lo] {
+                out.push(0xE0 | (c >> 12) as u8);
+                out.push(0x80 | ((c >> 6) & 0x3F) as u8);
+                out.push(0x80 | (c & 0x3F) as u8);
+            }
+        }
+    }
+    out
+}
+
 pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, String> {
     if class.len() < 10 || class[0..4] != [0xCA, 0xFE, 0xBA, 0xBE] {
         return Err("不是 class 文件".into());
@@ -1227,6 +1414,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     let mut bootstrap_attr: Option<Attr> = None;
     let mut class_anns = Anns::default();
     let mut record_comps: Vec<RecordComp> = Vec::new();
+    let mut has_record_attr = false;
     let mut record_names: Vec<String> = Vec::new();
 
     // 属性名提前入池只适用于 1.21.x(installertools); ART 的属性名在 toByteArray 末尾才登记
@@ -1337,6 +1525,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
             "Record" => {
                 let (comps, raws) = read_record(&mut cp, maps, class, a.off, &this_name, flags)?;
                 record_comps = comps;
+                has_record_attr = true;
                 record_names = raws;
             }
             "RuntimeVisibleAnnotations" => class_anns.rv = read_anns(&mut cp, maps, class, a.off)?,
@@ -1395,7 +1584,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     }
 
     // 仅 ART(复制常量池)路径有这一步; SpecialSource 路径不做
-    let synth_prefix = if flags & FLAG_FRESH_POOL == 0 {
+    let synth_prefix = if flags & FLAG_FRESH_POOL == 0 || flags & FLAG_PARAM_ANN_FIX != 0 {
         synthetic_param_prefix(&cp, class, this_idx, &this_name, access)
     } else {
         Vec::new()
@@ -1414,11 +1603,11 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     let bootstrap_out = match &bootstrap_attr {
         Some(a) => {
             let table = bsm_parse(class, a.off, a.len);
-            bsm_begin(table);
+            bsm_begin(table, flags & FLAG_FRESH_POOL != 0, flags & FLAG_BSM_ARGS_FIRST != 0);
             Some(true)
         }
         None => {
-            bsm_begin(Vec::new());
+            bsm_begin(Vec::new(), flags & FLAG_FRESH_POOL != 0, flags & FLAG_BSM_ARGS_FIRST != 0);
             None
         }
     };
@@ -1552,13 +1741,18 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
                 fix(v);
             }
         }
-        // 所有参数都没有注解时 ASM 不创建该属性
+        // 所有参数都没有注解时 ASM 不创建该属性; ART 0.1.25 仍把属性名留在常量池里
         let all_empty = |p: &ParamAnns| p.per.iter().all(|v| v.is_empty());
+        let orphan = flags & FLAG_PARAM_ANN_FIX != 0;
+        let mut orphan_rv = false;
+        let mut orphan_ri = false;
         if param_rv.as_ref().map(&all_empty).unwrap_or(false) {
             param_rv = None;
+            orphan_rv = orphan;
         }
         if param_ri.as_ref().map(&all_empty).unwrap_or(false) {
             param_ri = None;
+            orphan_ri = orphan;
         }
         if let Some(off) = code_off {
             code = Some(remap_code(&mut cp, maps, class, off, flags, &mapped_params)?);
@@ -1576,6 +1770,8 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
             param_ri,
             default_value,
             method_params,
+            orphan_param_rv: orphan_rv,
+            orphan_param_ri: orphan_ri,
         });
     }
 
@@ -1790,6 +1986,12 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
             write_ann_attr(&mut tail_bytes, &mut cp, "RuntimeInvisibleTypeAnnotations", &m.anns.ri_type);
         }
         // ASM MethodWriter 的顺序: 类型注解在参数注解之前
+        if m.orphan_param_rv {
+            cp.add_utf8("RuntimeVisibleParameterAnnotations");
+        }
+        if m.orphan_param_ri {
+            cp.add_utf8("RuntimeInvisibleParameterAnnotations");
+        }
         if let Some(p) = &m.param_rv {
             write_param_ann_attr(&mut tail_bytes, &mut cp, "RuntimeVisibleParameterAnnotations", p);
         }
@@ -1819,7 +2021,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
     if nest_host_idx.is_some() { class_attr_count += 1; }
     if !nest_member_idx.is_empty() { class_attr_count += 1; }
     if !permitted_idx.is_empty() { class_attr_count += 1; }
-    if !record_comps.is_empty() { class_attr_count += 1; }
+    if has_record_attr { class_attr_count += 1; }
     tail_bytes.extend_from_slice(&class_attr_count.to_be_bytes());
 
     if !inner_idx.is_empty() {
@@ -1906,7 +2108,7 @@ pub fn remap_class(maps: &Maps, class: &[u8], flags: u32) -> Result<Vec<u8>, Str
             tail_bytes.extend_from_slice(&x.to_be_bytes());
         }
     }
-    if !record_comps.is_empty() {
+    if has_record_attr {
         let mut body = Vec::new();
         body.extend_from_slice(&(record_comps.len() as u16).to_be_bytes());
         for c in &record_comps {
@@ -2447,6 +2649,8 @@ fn remap_code(
     let mut ri_type = None;
     let mut lvt_loc: Option<(usize, usize)> = None;
     let mut lvtt_loc: Option<(usize, usize)> = None;
+    let mut rv_type_loc: Option<usize> = None;
+    let mut ri_type_loc: Option<usize> = None;
     for _ in 0..ac {
         let name_idx = r.u2();
         let len = r.u4() as usize;
@@ -2461,6 +2665,11 @@ fn remap_code(
                         .into_iter()
                         .map(|mut f| {
                             f.offset = map_of(f.offset as usize) as u16;
+                            for v in f.locals.iter_mut().chain(f.stack.iter_mut()) {
+                                if let Vti::Uninit(pc) = v {
+                                    *pc = map_of(*pc as usize) as u16;
+                                }
+                            }
                             f
                         })
                         .collect(),
@@ -2479,8 +2688,8 @@ fn remap_code(
             }
             "LocalVariableTable" => lvt_loc = Some((boff, len)),
             "LocalVariableTypeTable" => lvtt_loc = Some((boff, len)),
-            "RuntimeVisibleTypeAnnotations" => rv_type = Some(read_type_anns(cp, maps, class, boff)?),
-            "RuntimeInvisibleTypeAnnotations" => ri_type = Some(read_type_anns(cp, maps, class, boff)?),
+            "RuntimeVisibleTypeAnnotations" => rv_type_loc = Some(boff),
+            "RuntimeInvisibleTypeAnnotations" => ri_type_loc = Some(boff),
             other => return Err(format!("未处理的 Code 子属性: {other}")),
         }
         r.p = boff + len;
@@ -2509,6 +2718,13 @@ fn remap_code(
         let (e, b) = read_lvt(cp, maps, class, boff, len, flags, params, true, None)?;
         lvtt = Some(e);
         lvtt_raw = Some(b);
+    }
+    // ASM 在局部变量之后才访问 Code 级类型注解
+    if let Some(off) = rv_type_loc {
+        rv_type = Some(read_type_anns_map(cp, maps, class, off, Some(&map))?);
+    }
+    if let Some(off) = ri_type_loc {
+        ri_type = Some(read_type_anns_map(cp, maps, class, off, Some(&map))?);
     }
     // 局部变量表的偏移也要跟随代码布局
     let fix = |entries: &mut Vec<LvtEntry>| {
@@ -2911,6 +3127,9 @@ pub fn set_inherit_methods(v: bool) {
 static mut BSM_TABLE: Option<Vec<BsmEntry>> = None;
 static mut BSM_OUT: Option<Vec<(u16, Vec<u16>)>> = None;
 static mut BSM_MAP: Option<std::collections::HashMap<u16, u16>> = None;
+// 新建常量池时 BootstrapMethods 由 indy 常量的登记顺序重新生成, 不保留原表
+static mut BSM_FRESH: bool = false;
+static mut BSM_ARGS_FIRST: bool = false;
 
 fn bsm_parse(class: &[u8], off: usize, len: usize) -> Vec<BsmEntry> {
     let body = &class[off..off + len];
@@ -2931,10 +3150,12 @@ fn bsm_parse(class: &[u8], off: usize, len: usize) -> Vec<BsmEntry> {
     out
 }
 
-fn bsm_begin(table: Vec<BsmEntry>) {
+fn bsm_begin(table: Vec<BsmEntry>, fresh: bool, args_first: bool) {
     unsafe {
         BSM_OUT = Some(Vec::new());
         BSM_MAP = Some(std::collections::HashMap::new());
+        BSM_FRESH = fresh;
+        BSM_ARGS_FIRST = args_first;
         BSM_TABLE = Some(table);
     }
 }
@@ -2944,15 +3165,58 @@ fn bsm_resolve(cp: &mut Cp, maps: &Maps, old: u16) -> Result<u16, String> {
     if let Some(&n) = unsafe { BSM_MAP.as_ref().and_then(|m| m.get(&old)) } {
         return Ok(n);
     }
+    if unsafe { BSM_FRESH } {
+        let e = unsafe { BSM_TABLE.as_ref().and_then(|t| t.get(old as usize)).cloned() }
+            .ok_or_else(|| format!("引导方法索引越界: {old}"))?;
+        let args_first = unsafe { BSM_ARGS_FIRST };
+        let mut args = Vec::with_capacity(e.args.len());
+        let nmh;
+        if args_first {
+            for a in &e.args {
+                args.push(remap_constant(cp, maps, *a)?);
+            }
+            nmh = remap_method_handle(cp, maps, e.mh)?;
+        } else {
+            nmh = remap_method_handle(cp, maps, e.mh)?;
+            for a in &e.args {
+                args.push(remap_constant(cp, maps, *a)?);
+            }
+        }
+        let n = unsafe {
+            let out = BSM_OUT.as_mut().unwrap();
+            match out.iter().position(|x| *x == (nmh, args.clone())) {
+                Some(k) => k as u16,
+                None => {
+                    out.push((nmh, args));
+                    (out.len() - 1) as u16
+                }
+            }
+        };
+        unsafe {
+            if let Some(m) = BSM_MAP.as_mut() {
+                m.insert(old, n);
+            }
+        }
+        return Ok(n);
+    }
     let e = unsafe { BSM_TABLE.as_ref().and_then(|t| t.get(old as usize)).cloned() };
     let e = match e {
         Some(e) => e,
         None => return Err(format!("引导方法索引越界: {old}")),
     };
-    let nmh = remap_method_handle(cp, maps, e.mh)?;
+    let args_first = unsafe { BSM_ARGS_FIRST };
     let mut args = Vec::with_capacity(e.args.len());
-    for a in &e.args {
-        args.push(remap_constant(cp, maps, *a)?);
+    let nmh;
+    if args_first {
+        for a in &e.args {
+            args.push(remap_constant(cp, maps, *a)?);
+        }
+        nmh = remap_method_handle(cp, maps, e.mh)?;
+    } else {
+        nmh = remap_method_handle(cp, maps, e.mh)?;
+        for a in &e.args {
+            args.push(remap_constant(cp, maps, *a)?);
+        }
     }
     let base = unsafe { BSM_TABLE.as_ref().map(|t| t.len()).unwrap_or(0) } as u16;
     let unchanged = nmh == e.mh && args == e.args;
@@ -2981,7 +3245,12 @@ fn bsm_resolve(cp: &mut Cp, maps: &Maps, old: u16) -> Result<u16, String> {
 
 fn bsm_body(cp: &mut Cp, maps: &Maps) -> Result<Vec<u8>, String> {
     let _ = (cp, maps);
-    let orig = unsafe { BSM_TABLE.as_ref().cloned().unwrap_or_default() };
+    let fresh = unsafe { BSM_FRESH };
+    let orig = if fresh {
+        Vec::new()
+    } else {
+        unsafe { BSM_TABLE.as_ref().cloned().unwrap_or_default() }
+    };
     let extra = unsafe { BSM_OUT.as_ref().cloned().unwrap_or_default() };
     let total = orig.len() + extra.len();
     let mut out = Vec::with_capacity(total * 8 + 2);

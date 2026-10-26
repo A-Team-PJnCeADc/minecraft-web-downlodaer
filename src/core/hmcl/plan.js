@@ -1,5 +1,6 @@
 // 安装计划构建: 对齐 HMCL 的 GameBuilder 流程
 // 顺序: 原版版本 JSON -> 加载器补丁 -> 库 -> 客户端 jar -> 资源索引/对象 -> 日志配置 -> 整合包文件与覆盖
+import { chainSpecFor } from './forgechain.js';
 import {
   collectLibraries, mergeVersionJson, assetObjectPath, sanitizeId,
 } from './version.js';
@@ -391,6 +392,7 @@ export async function buildVersionPlan(options) {
   let merged = baseJson;
   const unsupported = [];
   let forgeInfo = null;
+  let forgeChain = null;
 
   if (loader && loader.type) {
     if (['fabric', 'quilt', 'legacyfabric'].includes(loader.type)) {
@@ -401,11 +403,46 @@ export async function buildVersionPlan(options) {
         forgeInfo = await resolveForgePatch(sources, versionId, loader, onStatus);
         merged = mergeVersionJson(baseJson, forgeInfo.versionJson, instanceIdFor(versionId, loader));
         if (forgeInfo.pendingProcessors.length) {
-          unsupported.push({
-            item: '安装处理器',
-            detail: `安装器声明 ${forgeInfo.pendingProcessors.length} 个 processor, 需要 JVM 运行, 浏览器无法执行`,
-            jars: forgeInfo.pendingProcessors,
-          });
+          const spec = chainSpecFor(versionId);
+          if (spec?.pending) {
+            unsupported.push({
+              item: '补丁链',
+              detail: `${versionId} 的映射需要先做 DOWNLOAD_MOJMAPS 的 sanitize 转换(proguard 文本 -> tsrg), 尚未实现`,
+            });
+          } else if (spec) {
+            forgeChain = {
+              spec,
+              patchEntry: 'data/client.lzma',
+              client: baseJson.downloads?.client
+                ? {
+                  size: baseJson.downloads.client.size || 0,
+                  sha1: baseJson.downloads.client.sha1 || null,
+                  urls: sources.dataUrlCandidates(baseJson.downloads.client.url),
+                }
+                : null,
+              mojmap: baseJson.downloads?.client_mappings
+                ? {
+                  size: baseJson.downloads.client_mappings.size || 0,
+                  sha1: baseJson.downloads.client_mappings.sha1 || null,
+                  urls: sources.dataUrlCandidates(baseJson.downloads.client_mappings.url),
+                }
+                : null,
+              mcpConfig: null,
+              steps: [
+                { name: '取回输入', status: 'local' },
+                { name: '映射合并', status: 'local' },
+                { name: '类重写', status: 'local', flags: spec.flags },
+                { name: 'binpatch', status: 'local' },
+              ],
+              output: null,
+            };
+          } else {
+            unsupported.push({
+              item: '安装处理器',
+              detail: `安装器声明 ${forgeInfo.pendingProcessors.length} 个 processor, 需要 JVM 运行, 浏览器无法执行`,
+              jars: forgeInfo.pendingProcessors,
+            });
+          }
         }
       } catch (err) {
         // 安装器取不到时不放弃整个计划: 仍然导出原版 + 整合包文件, 只是缺少加载器补丁
@@ -428,6 +465,32 @@ export async function buildVersionPlan(options) {
 
   const jarTask = clientJarTask(merged, sources);
   if (jarTask) jarTask.path = root + id + '.jar';
+  if (forgeChain) {
+    forgeChain.output = root + id + '.jar';
+    // mcp_config / neoform 只在安装器的 libraries 里声明, 版本 json 的库列表里没有
+    const zipLib = (forgeInfo?.installerProfile?.libraries || [])
+      .find((l) => /(mcp_config|neoform)/.test(l.name || '') && /@zip$/.test(l.name || ''));
+    const art = zipLib?.downloads?.artifact;
+    if (art?.path) {
+      forgeChain.mcpConfig = {
+        size: art.size || 0,
+        sha1: art.sha1 || null,
+        urls: sources.libraryCandidates({ name: zipLib.name, mavenPath: art.path, explicitUrl: art.url }),
+        entry: 'config/joined.tsrg',
+      };
+    }
+    const mode = forgeChain.spec.mappings || 'merged';
+    const missing = [];
+    if (!forgeChain.client) missing.push('客户端 jar');
+    if (mode !== 'joined' && !forgeChain.mojmap) missing.push('官方映射');
+    if (mode !== 'mojmap' && !forgeChain.mcpConfig) missing.push('MCP 配置');
+    if (missing.length) {
+      unsupported.push({
+        item: '补丁链输入',
+        detail: `缺少 ${missing.join(' / ')}, 无法在浏览器内改名`,
+      });
+    }
+  }
 
   const assetPlan = await planAssets(sources, merged, { includeAssets, gameVersion: versionId });
   warnings.push(...assetPlan.warnings);
@@ -460,6 +523,7 @@ export async function buildVersionPlan(options) {
     warnings,
     unsupported,
     forgeInfo,
+    forgeChain,
     assetBlocked: Boolean(assetPlan.assetBlocked),
     assetProbe: assetPlan.assetProbe || null,
     stats: summarize(tasks, assetPlan),

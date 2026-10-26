@@ -68,6 +68,7 @@ const plan = await buildVersionPlan({
 console.log(`计划完成 ${((performance.now() - t0) / 1000).toFixed(2)}s, 条目 ${plan.stats.taskCount}, 预计 ${(plan.stats.totalBytes / 1048576).toFixed(1)} MiB`);
 for (const w of plan.warnings) console.log('警告:', w);
 for (const u of plan.unsupported) console.log('不支持:', u.item, '-', u.detail);
+if (plan.forgeChain) console.log('补丁链:', plan.forgeChain.spec.kind, 'flags', plan.forgeChain.spec.flags, '输出', plan.forgeChain.output, '步骤', plan.forgeChain.steps.map((x) => `${x.name}:${x.status}`).join(' '));
 if (plan.stats.byCategory) {
   for (const [k, v] of Object.entries(plan.stats.byCategory)) {
     console.log(`  ${k}: ${v.count} 个, ${(v.bytes / 1048576).toFixed(1)} MiB`);

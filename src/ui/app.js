@@ -12,6 +12,7 @@ import { FetchPool } from '../core/dl/pool.js';
 import { HashPool } from '../core/dl/hashpool.js';
 import { openOpfsSink, openFileSink } from '../core/zip/sink.js';
 import { detectTarget } from '../core/hmcl/version.js';
+import { runPlannedChain } from '../core/hmcl/forgechain.js';
 
 const $ = (id) => document.getElementById(id);
 const fmtBytes = (n) => {
@@ -923,6 +924,40 @@ async function startExport() {
   try {
     const sink = await chooseSink(zipName);
     state.zipWriter = new ZipWriter(sink, { hashEngine: state.hashEngine });
+
+    if (plan.forgeChain) {
+      log('执行加载器补丁链: 取回输入 -> 映射合并 -> 类重写 -> binpatch');
+      const t0 = performance.now();
+      const chainOut = await runPlannedChain(plan, {
+        engine: state.hashEngine,
+        onStatus: (msg) => log(msg),
+        fetchBytes: async (urls, meta) => {
+          let lastErr = null;
+          for (const url of urls) {
+            try {
+              const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              const bytes = new Uint8Array(await res.arrayBuffer());
+              if (meta?.size && bytes.length !== meta.size) {
+                throw new Error(`大小不符 ${bytes.length} != ${meta.size}`);
+              }
+              return bytes;
+            } catch (err) {
+              lastErr = err;
+            }
+          }
+          throw new Error(`${urls[0]}: ${lastErr?.message || '取回失败'}`);
+        },
+      });
+      const jarPath = plan.forgeChain.output;
+      const at = plan.tasks.findIndex((t) => t.path === jarPath);
+      const oldSize = at >= 0 ? plan.tasks[at].size || 0 : 0;
+      const local = { kind: 'local', category: 'jar', path: jarPath, bytes: chainOut.jar };
+      if (at >= 0) plan.tasks[at] = local;
+      else plan.tasks.push(local);
+      plan.stats = { ...plan.stats, totalBytes: plan.stats.totalBytes - oldSize + chainOut.jar.length };
+      log(`补丁链完成 ${((performance.now() - t0) / 1000).toFixed(1)}s, jar ${chainOut.jar.length} 字节`);
+    }
     const poolSize = Math.max(2, Math.min(state.settings.concurrency, 24));
     state.pool = new FetchPool({ size: poolSize });
     state.hashPool = state.settings.hashWorkers > 0
